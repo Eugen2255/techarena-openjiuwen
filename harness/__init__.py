@@ -2,8 +2,11 @@
 import os
 import tempfile
 
-from openjiuwen.core.common.logging.default.constant import DEFAULT_INNER_LOG_CONFIG
-from openjiuwen.core.common.logging.log_config import configure_log_config
+try:
+    from openjiuwen.core.common.logging.default.constant import DEFAULT_INNER_LOG_CONFIG
+    from openjiuwen.core.common.logging.log_config import configure_log_config
+except ImportError:  # тесты быстрого пути (tests/) запускаются и без openJiuwen
+    configure_log_config = None
 
 
 def _configure_openjiuwen_logging() -> None:
@@ -26,4 +29,5 @@ def _configure_openjiuwen_logging() -> None:
     configure_log_config(config)
 
 
-_configure_openjiuwen_logging()
+if configure_log_config is not None:
+    _configure_openjiuwen_logging()
