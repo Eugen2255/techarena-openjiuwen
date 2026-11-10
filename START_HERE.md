@@ -52,8 +52,8 @@
    Docker Desktop (на Windows — с бэкендом WSL2). Проверка: `docker run --rm hello-world`.
 3. **Склонировать репозиторий и создать `.env`:**
    ```bash
-   git clone <URL репозитория>
-   cd techarena-harness
+   git clone https://github.com/Eugen2255/techarena-openjiuwen.git
+   cd techarena-openjiuwen
    cp .env.example .env        # Windows (PowerShell или cmd): copy .env.example .env
    ```
    Откройте `.env` в любом редакторе (на Windows: `notepad .env`) и впишите ключ после `LLM_API_KEY=`,
@@ -118,7 +118,8 @@
 Роли из `docs/pipeline.md`, раздел 8. Договоритесь, кто какую берёт.
 
 **Инфраструктура и надёжность**
-1. Создать GitHub-репозиторий (приватный) и дать доступ жюри: `promsoft`, `madrugado`.
+1. Репозиторий: https://github.com/Eugen2255/techarena-openjiuwen (приватный). Проверить, что у жюри
+   (`promsoft`, `madrugado`) и у всей команды есть доступ (Settings → Collaborators).
    (Проверки на ключе NeuralDeep — id моделей, `usage`, учёт рассуждений, лимиты — уже сделаны, см. `docs/organizers_faq.md`.)
 2. Замерить время чистой сборки (`docker build --no-cache`) на быстрой сети, например в GitHub Actions.
    Если она близка к 1000 с — сократить зависимости.
