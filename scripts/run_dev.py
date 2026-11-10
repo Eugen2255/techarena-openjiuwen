@@ -40,8 +40,9 @@ def copy_tasks(src: Path, dst: Path, only: list[str]) -> None:
     for task_dir in sorted(p for p in src.iterdir() if p.is_dir()):
         if only and task_dir.name not in only:
             continue
+        # hidden/ — скрытые тесты генератора: в контейнер их не отдаём, evaluate.py берёт их из исходного набора.
         shutil.copytree(task_dir, dst / task_dir.name,
-                        ignore=shutil.ignore_patterns("answer.txt", "__pycache__", ".DS_Store"))
+                        ignore=shutil.ignore_patterns("answer.txt", "__pycache__", ".DS_Store", "hidden"))
 
 
 def docker_command(tasks_dir: Path, logs_dir: Path, name: str) -> list[str]:

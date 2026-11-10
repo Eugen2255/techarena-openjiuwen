@@ -44,7 +44,9 @@
 | `harness/tools.py` | bash-инструмент агента поверх `harness/shell.py` |
 | `harness/writer.py` | атомарная запись `answer.txt` и файла решений |
 | `scripts/run_dev.py` | прогон на копии задач в Docker с флагами регламента + оценка |
-| `scripts/evaluate.py` | баллы по `expected`/`check` и токены по траекториям |
+| `scripts/evaluate.py` | баллы по `expected`/`check`, скрытые тесты coding, сводка по видам задач, токены по траекториям |
+| `scripts/generate_tasks.py` | генератор задач 4 типов: шаблоны, перефразировки, невыполнимые; скрытые тесты coding в `hidden/` |
+| `scripts/check_fastpath.py` | проверка быстрого пути на наборе с `expected` без LLM; ошибок должно быть 0 |
 | `tasks_examples/` | 8 примеров от организаторов. **Не изменять** |
 | `tasks_custom/` | наши невыполнимые примеры (`"feasible": false`): правильно — не создать `answer.txt` |
 | `docs/` | регламент, ответы организаторов, план |
@@ -57,6 +59,9 @@ python scripts/run_dev.py --only math_0004     # одна задача
 python scripts/run_dev.py --no-build           # без пересборки образа
 python scripts/run_dev.py --tasks tasks_custom # невыполнимые примеры: ни одного answer.txt
 python -m unittest discover -s tests           # тесты решателей быстрого пути (без Docker и openJiuwen)
+python scripts/generate_tasks.py --count 100 --seed 1 --force   # набор в tasks_generated/ (не коммитится)
+python scripts/check_fastpath.py tasks_generated                # быстрый путь без LLM: ошибок должно быть 0
+python scripts/run_dev.py --tasks tasks_generated               # репетиция финала: 100 задач в Docker
 python scripts/evaluate.py runs/<время>/tasks --original tasks_examples --logs runs/<время>/logs
 ```
 
@@ -74,6 +79,9 @@ python scripts/evaluate.py runs/<время>/tasks --original tasks_examples --l
 - Одна задача не должна ронять весь прогон: исключения внутри решения ловятся и пишутся в траекторию.
 - Новый решатель быстрого пути — с тестами в `tests/`: примеры организаторов, вариации формулировок и случаи,
   на которых решатель обязан вернуть `None` (незнакомое предложение, неполные данные). Неверный ответ отсюда
-  никто не перепроверит, поэтому при любом сомнении — `None`.
+  никто не перепроверит, поэтому при любом сомнении — `None`. После изменения прогнать
+  `scripts/check_fastpath.py` на сгенерированном наборе (лучше на нескольких сидах): ошибок должно быть 0.
+- Новые формулировки задач добавлять в `scripts/generate_tasks.py` вместе с правильным ответом — так генератор
+  проверяет и решатели, и агента.
 - Не трогать `tasks_examples/` и тесты внутри задач. Свои наборы задач — в отдельные папки.
 - Ветка на каждую задачу, PR в `main`; `main` всегда собирается и проходит примеры.
