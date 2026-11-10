@@ -12,11 +12,13 @@ from pathlib import Path
 from openjiuwen.core.runner import Runner
 from openjiuwen.core.single_agent import AgentCard, ReActAgent, ReActAgentConfig
 
+from harness.coding import solve_coding
 from harness.config import Settings
 from harness.llm import client_config, make_model, request_config
 from harness.meter import TokenMeter, Usage
 from harness.tasks import Task
-from harness.tools import make_bash_tool, run_command
+from harness.shell import run_command
+from harness.tools import make_bash_tool
 
 log = logging.getLogger(__name__)
 
@@ -203,6 +205,14 @@ async def solve(task: Task, settings: Settings, meter: TokenMeter) -> SolveResul
     had_stray = stray_answer.exists()
     tool = None
     try:
+        if task.task_type == "coding":
+            # Сначала дешёвый путь в один вызов; агент — только если раскладка задачи непривычная.
+            outcome = await solve_coding(task, settings, meter, model_name)
+            if outcome is not None:
+                result.solver = "coding"
+                result.answer, result.infeasible, result.local_ok = outcome.answer, outcome.infeasible, outcome.local_ok
+                result.note, result.final_text = outcome.note, outcome.final_text
+                return result
         context = await gather_context(task, workdir, settings)
         query = "\n\n".join(p for p in (task.instruction, context, QUERY_FOOTER) if p)
         agent, tool = _build_agent(task, workdir, settings, meter, model_name)
