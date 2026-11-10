@@ -1,0 +1,3 @@
+# Прямые зависимости харнесса. Полный список с версиями — requirements.txt
+# (пересобрать: uv pip compile requirements.in --python-version 3.12 --python-platform x86_64-manylinux_2_28 -o requirements.txt)
+openjiuwen==0.1.20.post1

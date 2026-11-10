@@ -1,0 +1,6 @@
+# В образ попадает только то, что нужно для работы харнесса.
+*
+!requirements.txt
+!run_agent.py
+!harness/
+**/__pycache__
