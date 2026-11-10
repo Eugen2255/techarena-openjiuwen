@@ -1,0 +1,55 @@
+{
+  "fitted_at": "2026-11-11 01:09",
+  "fitted_on": [
+    "trajectories/estimator_dataset.jsonl"
+  ],
+  "n_records": 336,
+  "routes": {
+    "agent:data_analysis": {
+      "intercept": 308.1059,
+      "coef": {},
+      "upper_factor": 1.756,
+      "n": 34,
+      "mean_cost": 308.1,
+      "loo_mae": 111.2,
+      "loo_mape": 0.347,
+      "loo_under": 0.294,
+      "loo_upper_under": 0.088
+    },
+    "agent:math": {
+      "intercept": 181.5189,
+      "coef": {
+        "instruction_chars": 0.100068
+      },
+      "upper_factor": 1.326,
+      "n": 25,
+      "mean_cost": 230.5,
+      "loo_mae": 48.7,
+      "loo_mape": 0.195,
+      "loo_under": 0.24,
+      "loo_upper_under": 0.08
+    },
+    "agent:search": {
+      "intercept": 378.08,
+      "coef": {},
+      "upper_factor": 1.702,
+      "n": 5,
+      "mean_cost": 378.1,
+      "loo_mae": 116.7,
+      "loo_mape": 0.336,
+      "loo_under": 0.6,
+      "loo_upper_under": 0.0
+    },
+    "coding": {
+      "intercept": 96.1818,
+      "coef": {},
+      "upper_factor": 1.349,
+      "n": 66,
+      "mean_cost": 96.2,
+      "loo_mae": 23.2,
+      "loo_mape": 0.281,
+      "loo_under": 0.515,
+      "loo_upper_under": 0.091
+    }
+  }
+}

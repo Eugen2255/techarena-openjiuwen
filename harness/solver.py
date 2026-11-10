@@ -12,6 +12,7 @@ from pathlib import Path
 from openjiuwen.core.runner import Runner
 from openjiuwen.core.single_agent import AgentCard, ReActAgent, ReActAgentConfig
 
+from harness.answers import normalize_answer
 from harness.coding import solve_coding
 from harness.config import Settings
 from harness.llm import client_config, make_model, request_config
@@ -222,6 +223,8 @@ async def solve(task: Task, settings: Settings, meter: TokenMeter) -> SolveResul
         )
         result.final_text = _final_text(output)
         answer = extract_answer(workdir, result.final_text)
+        if answer is not None:
+            answer = normalize_answer(answer, task.check)
         if answer is not None and is_infeasible(answer):
             result.infeasible = True
         elif answer is not None:

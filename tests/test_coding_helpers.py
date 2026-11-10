@@ -49,6 +49,14 @@ class ContradictionTest(unittest.TestCase):
     def test_detects_contradiction(self):
         self.assertTrue(contradictory_tests([(CONTRADICTORY / "test_mylib.py").read_text(encoding="utf-8")]))
 
+    def test_detects_mixed_form_contradiction(self):
+        self.assertTrue(contradictory_tests(["self.assertEqual(m.total([1, 2]), 3)\n"
+                                             "self.assertTrue(m.total([1, 2]) == 4)\n"]))
+
+    def test_consistent_mixed_forms_are_fine(self):
+        self.assertFalse(contradictory_tests(["self.assertEqual(m.total([1, 2]), 3)\n"
+                                              "self.assertTrue(m.total([1, 2]) == 3)\n"]))
+
     def test_normal_tests_are_not_contradictory(self):
         for task in ("coding_0003", "coding_0007"):
             with self.subTest(task=task):

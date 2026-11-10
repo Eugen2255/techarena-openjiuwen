@@ -82,6 +82,8 @@ def main() -> int:
     tasks_dir, logs_dir = run_dir / "tasks", run_dir / "logs"
     copy_tasks(args.tasks.resolve(), tasks_dir, args.only)
     logs_dir.mkdir(parents=True)
+    # Исходный набор нужен scripts/fit_estimator.py: признаки считаются по задачам до решения.
+    (run_dir / "source.txt").write_text(str(args.tasks.resolve()), encoding="utf-8")
     print(f"run dir: {run_dir}", flush=True)
 
     if args.local:

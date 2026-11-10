@@ -39,6 +39,8 @@
 | `harness/solver.py` | решение задачи агентом: сбор контекста без LLM → ReActAgent + bash → `ANSWER:`/`INFEASIBLE` → локальная проверка |
 | `harness/coding.py` | coding за один вызов: модель присылает исправленные функции, харнесс подставляет их и гоняет тесты; противоречивые тесты → невыполнима без LLM; агент — запасной путь |
 | `harness/shell.py` | запуск shell-команд (таймаут, обрезка вывода, без секретов в env); без внешних зависимостей |
+| `harness/estimator.py` | прогноз стоимости до запуска: маршрут (быстрый путь / coding / агент) + линейная модель; параметры — `harness/estimator_params.json` |
+| `harness/answers.py` | приведение ответа к формату проверки (`6668.0` → `6668` для exact_int) |
 | `harness/llm.py` | модели openJiuwen (`MeteredModel`): счётчик токенов, стоп по бюджету, лимит частоты, повторы при 429/5xx |
 | `harness/meter.py` | стоимость = выходные + входные/10; общий бюджет, резерв на идущие вызовы (бюджет нельзя пересечь — прокси обрывает запуск), потолок на задачу |
 | `harness/tools.py` | bash-инструмент агента поверх `harness/shell.py` |
@@ -47,6 +49,9 @@
 | `scripts/evaluate.py` | баллы по `expected`/`check`, скрытые тесты coding, сводка по видам задач, токены по траекториям |
 | `scripts/generate_tasks.py` | генератор задач 4 типов: шаблоны, перефразировки, невыполнимые; скрытые тесты coding в `hidden/` |
 | `scripts/check_fastpath.py` | проверка быстрого пути на наборе с `expected` без LLM; ошибок должно быть 0 |
+| `scripts/estimate.py` | прогноз стоимости для набора задач (таблица или JSON) |
+| `scripts/fit_estimator.py` | подбор параметров оценщика по прогонам или по `trajectories/estimator_dataset.jsonl`, проверка на отложенных прогонах |
+| `trajectories/` | собранные траектории (`raw/`) и обучающая выборка оценщика |
 | `tasks_examples/` | 8 примеров от организаторов. **Не изменять** |
 | `tasks_custom/` | наши невыполнимые примеры (`"feasible": false`): правильно — не создать `answer.txt` |
 | `docs/` | регламент, ответы организаторов, план |
@@ -62,6 +67,8 @@ python -m unittest discover -s tests           # тесты решателей �
 python scripts/generate_tasks.py --count 100 --seed 1 --force   # набор в tasks_generated/ (не коммитится)
 python scripts/check_fastpath.py tasks_generated                # быстрый путь без LLM: ошибок должно быть 0
 python scripts/run_dev.py --tasks tasks_generated               # репетиция финала: 100 задач в Docker
+python scripts/estimate.py tasks_generated                      # прогноз стоимости без LLM
+python scripts/fit_estimator.py --dataset trajectories/estimator_dataset.jsonl --write  # переподбор оценщика
 python scripts/evaluate.py runs/<время>/tasks --original tasks_examples --logs runs/<время>/logs
 ```
 
@@ -83,5 +90,8 @@ python scripts/evaluate.py runs/<время>/tasks --original tasks_examples --l
   `scripts/check_fastpath.py` на сгенерированном наборе (лучше на нескольких сидах): ошибок должно быть 0.
 - Новые формулировки задач добавлять в `scripts/generate_tasks.py` вместе с правильным ответом — так генератор
   проверяет и решатели, и агента.
+- Изменение, которое меняет расход харнесса (промпты, маршруты, решатели), делает параметры оценщика устаревшими:
+  прогнать сгенерированные наборы и переподобрать `harness/estimator_params.json` (`scripts/fit_estimator.py`),
+  выгрузив новую выборку в `trajectories/`.
 - Не трогать `tasks_examples/` и тесты внутри задач. Свои наборы задач — в отдельные папки.
 - Ветка на каждую задачу, PR в `main`; `main` всегда собирается и проходит примеры.

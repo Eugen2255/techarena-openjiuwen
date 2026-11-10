@@ -10,8 +10,9 @@ import time
 from collections import deque
 from pathlib import Path
 
-from harness import fastpath
+from harness import estimator, fastpath
 from harness.config import Settings, parse_settings
+from harness.estimator import Estimate
 from harness.meter import TokenMeter
 from harness.solver import SolveResult, solve, workdir_for
 from harness.tasks import Task, load_tasks
@@ -19,21 +20,13 @@ from harness.writer import AnswerWriter
 
 log = logging.getLogger("harness")
 
-# Априорная стоимость задачи в токенах (out + in/10) по замерам на примерах — заглушка до оценщика
-# (pipeline.md, раздел 6). Используется и для порядка, и чтобы не начинать задачу, на которую не хватит бюджета.
-PRIOR_COST = {"math": 400, "data_analysis": 450, "search": 600, "coding": 800}
-DEFAULT_PRIOR_COST = 800
 # Столько ошибок LLM подряд (без единого ответа) считаем признаком, что прокси больше не отвечает.
 MAX_LLM_ERRORS_IN_ROW = 5
 
 
-def estimate_cost(task: Task) -> float:
-    return PRIOR_COST.get(task.task_type, DEFAULT_PRIOR_COST)
-
-
-def plan(tasks: list[Task]) -> list[Task]:
-    """Порядок решения агентом. Заменить на reward * P(успех) / E[стоимость] от оценщика."""
-    return sorted(tasks, key=lambda t: t.reward / estimate_cost(t), reverse=True)
+def plan(tasks: list[Task], estimates: dict[str, Estimate]) -> list[Task]:
+    """Порядок решения агентом: больше баллов на токен — раньше. TODO: учесть P(успех)."""
+    return sorted(tasks, key=lambda t: t.reward / max(estimates[t.task_id].cost, 1.0), reverse=True)
 
 
 class TrajectoryLog:
@@ -62,13 +55,16 @@ class Run:
         self.trajectories = TrajectoryLog(settings.log_dir)
         self.stats = {"answered": 0, "fastpath": 0, "infeasible": 0, "skipped_budget": 0, "llm_errors_in_row": 0}
 
-    def finish(self, task: Task, result: SolveResult, estimate: float | None = None) -> None:
+    def finish(self, task: Task, result: SolveResult, estimate: Estimate | None = None) -> None:
         if result.answer is not None:
             self.writer.save(task, result.answer)
             self.stats["answered"] += 1
         self.stats["infeasible"] += result.infeasible
         record = result.as_record()
-        record["estimate"] = estimate
+        # Прогноз до запуска рядом с фактом — для проверки и дообучения оценщика.
+        record["route"] = estimate.route if estimate else "fastpath"
+        record["estimate"] = round(estimate.cost) if estimate else 0
+        record["estimate_upper"] = round(estimate.upper) if estimate else 0
         self.trajectories.write(record)
         log.info("[%s] %s answer=%r%s cost=%.0f %.1fs%s", task.task_id, result.solver, result.answer,
                  " INFEASIBLE" if result.infeasible else "", result.usage.cost, result.seconds,
@@ -86,13 +82,17 @@ class Run:
             self.stats["fastpath"] += 1
             self.finish(task, SolveResult(task.task_id, task.task_type, task.reward, solver="fastpath",
                                           answer=fast.answer, infeasible=fast.infeasible, note=fast.note,
-                                          seconds=time.monotonic() - started), estimate=0)
+                                          seconds=time.monotonic() - started))
         return rest
 
     async def run_llm(self, tasks: list[Task]) -> int:
         """Решает задачи агентом в нескольких воркерах. Возвращает число неначатых задач."""
         settings, meter = self.settings, self.meter
-        queue = deque(plan(tasks))
+        params = estimator.load_params()
+        estimates = {t.task_id: estimator.estimate(t, params) for t in tasks}
+        log.info("estimated cost of the remaining %d tasks: %.0f tokens (upper %.0f)", len(tasks),
+                 sum(e.cost for e in estimates.values()), sum(e.upper for e in estimates.values()))
+        queue = deque(plan(tasks, estimates))
         loop = asyncio.get_running_loop()
         deadline = loop.time() + settings.time_limit_s
         stop = asyncio.Event()
@@ -104,11 +104,12 @@ class Run:
                     stop.set()
                     break
                 task = queue.popleft()
-                estimate = estimate_cost(task)
+                estimate = estimates[task.task_id]
                 remaining = meter.remaining()
-                if remaining is not None and remaining < estimate:
+                if remaining is not None and remaining < estimate.cost:
                     self.stats["skipped_budget"] += 1
-                    log.info("[%s] skipped: estimate %.0f > remaining budget %.0f", task.task_id, estimate, remaining)
+                    log.info("[%s] skipped: estimate %.0f > remaining budget %.0f",
+                             task.task_id, estimate.cost, remaining)
                     continue
                 try:
                     result = await asyncio.wait_for(solve(task, settings, meter),

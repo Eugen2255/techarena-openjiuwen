@@ -52,7 +52,10 @@ def compact_test_output(output: str, limit: int = 1500) -> str:
 
 
 def contradictory_tests(test_sources: list[str]) -> bool:
-    """Один и тот же вызов ожидается с разными литералами (assertEqual) или и True, и False."""
+    """Один и тот же вызов ожидается с разными литералами или и True, и False.
+
+    Понимает assertEqual(f(x), 5), assertTrue(f(x) == 5) и пару assertTrue(e) / assertFalse(e).
+    """
     expected: dict[str, set] = {}
     for source in test_sources:
         try:
@@ -63,12 +66,18 @@ def contradictory_tests(test_sources: list[str]) -> bool:
             if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
                 continue
             name, args = node.func.attr, node.args
+            pair = None
             if name in ("assertEqual", "assertEquals") and len(args) >= 2:
+                pair = args[0], args[1]
+            elif (name == "assertTrue" and args and isinstance(args[0], ast.Compare)
+                  and len(args[0].ops) == 1 and isinstance(args[0].ops[0], ast.Eq)):
+                pair = args[0].left, args[0].comparators[0]
+            if pair is not None:
                 try:
-                    value = ast.literal_eval(args[1])
+                    value = ast.literal_eval(pair[1])
                 except (ValueError, SyntaxError):
                     continue
-                key = ast.dump(args[0])
+                key = ast.dump(pair[0])
             elif name in ("assertTrue", "assertFalse") and args:
                 key, value = ast.dump(args[0]), name == "assertTrue"
             else:
