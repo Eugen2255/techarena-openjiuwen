@@ -35,7 +35,7 @@
 | `harness/config.py` | настройки из аргументов и `HARNESS_*`; значения по умолчанию = боевые |
 | `harness/tasks.py` | загрузка `task.json` |
 | `harness/runner.py` | быстрый путь для всех задач, затем агент: порядок (`plan`), 5 воркеров, сторож времени и бюджета, траектории |
-| `harness/fastpath/` | детерминированные решатели по типам задач (`@register("<task_type>")`): `data_analysis.py`, `math_tasks.py`; тесты — `tests/` |
+| `harness/fastpath/` | детерминированные решатели по типам задач (`@register("<task_type>")`): `data_analysis.py`, `math_tasks.py`, `search.py`; умеют и ответить, и объявить задачу невыполнимой; тесты — `tests/` |
 | `harness/solver.py` | решение задачи агентом: сбор контекста без LLM → ReActAgent + bash → `ANSWER:`/`INFEASIBLE` → локальная проверка |
 | `harness/llm.py` | модели openJiuwen (`MeteredModel`): счётчик токенов, стоп по бюджету, лимит частоты, повторы при 429/5xx |
 | `harness/meter.py` | стоимость = выходные + входные/10; общий бюджет, резерв на идущие вызовы (бюджет нельзя пересечь — прокси обрывает запуск), потолок на задачу |

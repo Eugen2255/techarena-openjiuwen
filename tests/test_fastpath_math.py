@@ -30,11 +30,14 @@ class ExamplesTest(unittest.TestCase):
                 self.assertIsNotNone(result)
                 self.assertEqual(result.answer, task.raw["expected"])
 
-    def test_custom_infeasible_goes_to_agent(self):
+    def test_custom_infeasible(self):
         for task in load_tasks(REPO / "tasks_custom"):
             if task.task_type == "math":
                 with self.subTest(task=task.task_id):
-                    self.assertIsNone(try_solve(task, REPO))
+                    result = try_solve(task, REPO)
+                    self.assertIsNotNone(result)
+                    self.assertTrue(result.infeasible)
+                    self.assertIsNone(result.answer)
 
 
 class VariantsTest(unittest.TestCase):
@@ -48,9 +51,17 @@ class VariantsTest(unittest.TestCase):
         ("A depot starts with 7 crates. It receives 1 delivery of 5 crates each. "
          "How many crates does it have at the end?", "12"),
     ]
-    REFUSED = {
+    INFEASIBLE = {
         "unknown start": "A warehouse starts with an unknown number of boxes. It ships 36 boxes per day for 3 days. "
                          "How many boxes does it have at the end?",
+        "vague shipment": "A warehouse starts with 500 boxes. It ships some boxes per day for 3 days. "
+                          "How many boxes does it have at the end?",
+        "vague split": "A warehouse starts with 500 boxes. Then the stock is split equally into several warehouses "
+                       "and it keeps one share (rounded down). How many boxes does it have at the end?",
+    }
+    REFUSED = {
+        "vague but unknown operation": "A warehouse starts with 100 boxes. Then some of the stock is lost. "
+                                       "How many boxes does it have at the end?",
         "negative stock": "A warehouse starts with 10 boxes. It ships 5 boxes per day for 3 days. "
                           "It receives 2 deliveries of 87 boxes each. How many boxes does it have at the end?",
         "unknown operation": "A warehouse starts with 100 boxes. Then 10% of the stock is lost. "
@@ -71,6 +82,14 @@ class VariantsTest(unittest.TestCase):
                 result = solve(text)
                 self.assertIsNotNone(result)
                 self.assertEqual(result.answer, expected)
+
+    def test_infeasible(self):
+        for name, text in self.INFEASIBLE.items():
+            with self.subTest(case=name):
+                result = solve(text)
+                self.assertIsNotNone(result)
+                self.assertTrue(result.infeasible)
+                self.assertIsNone(result.answer)
 
     def test_refused(self):
         for name, text in self.REFUSED.items():

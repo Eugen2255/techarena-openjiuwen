@@ -7,7 +7,8 @@
   How many boxes does it have at the end? Compute it with the bash tool ...
 
 Каждое предложение условия должно целиком совпасть с одним из шаблонов ниже, иначе — None (решит агент).
-Запас, ушедший в минус, и деление на 0 тоже отдаём агенту: возможно, это невыполнимая задача.
+Если вместо числа стоит неопределённое количество («an unknown number of», «some»…), а всё остальное разобрано,
+задача невыполнима: точно посчитать нельзя. Запас, ушедший в минус, и деление на 0 отдаём агенту.
 """
 from __future__ import annotations
 
@@ -19,8 +20,12 @@ from harness.fastpath import FastAnswer, register
 from harness.tasks import Task
 
 _WORDS = r"[a-z]+(?: [a-z]+)?"
+# Число или неопределённое количество на его месте.
+_VAGUE = r"an unknown number of|an unspecified number of|a number of|some|several|a few"
+_QTY = rf"(?:\d+|{_VAGUE})"
+_NUMBER_GROUPS = ("n", "parts", "count", "days", "size")
 _QUESTION_RE = re.compile(rf"How many (?P<unit>{_WORDS}) does it have at the end\?")
-_START_RE = re.compile(rf"An? {_WORDS} (?:starts with|has) (?P<n>\d+) (?P<unit>{_WORDS})", re.IGNORECASE)
+_START_RE = re.compile(rf"An? {_WORDS} (?:starts with|has) (?P<n>{_QTY}) (?P<unit>{_WORDS})", re.IGNORECASE)
 _CONNECTOR_RE = re.compile(r"^(?:then|next|after that|finally),?\s+", re.IGNORECASE)
 _MULTIPLIERS = {"doubled": 2, "tripled": 3, "quadrupled": 4}
 
@@ -37,18 +42,19 @@ def _split(m: re.Match) -> Step:
 def _operations(unit: str) -> list[tuple[re.Pattern, Callable[[re.Match], Step]]]:
     """Шаблоны операций. Единица измерения должна совпадать с той, что в первом предложении."""
     u = re.escape(unit)
+    q = _QTY
     patterns: list[tuple[str, Callable[[re.Match], Step]]] = [
-        (r"the stock is split equally into (?P<parts>\d+) \w+ and it keeps one share \(rounded (?P<rounding>down|up)\)",
+        (rf"the stock is split equally into (?P<parts>{q}) \w+ and it keeps one share \(rounded (?P<rounding>down|up)\)",
          _split),
         (r"the stock is (?P<mult>doubled|tripled|quadrupled)(?: by merging with (?:a|two|three) sister warehouses?)?",
          lambda m: (lambda x, k=_MULTIPLIERS[m["mult"].lower()]: x * k)),
-        (rf"it ships (?P<count>\d+) {u} per day for (?P<days>\d+) days?",
+        (rf"it ships (?P<count>{q}) {u} per day for (?P<days>{q}) days?",
          lambda m: (lambda x, d=int(m["count"]) * int(m["days"]): x - d)),
-        (rf"it receives (?P<count>\d+) deliver(?:y|ies) of (?P<size>\d+) {u} each",
+        (rf"it receives (?P<count>{q}) deliver(?:y|ies) of (?P<size>{q}) {u} each",
          lambda m: (lambda x, d=int(m["count"]) * int(m["size"]): x + d)),
-        (rf"it (?:ships|sells|loses) (?P<n>\d+) {u}",
+        (rf"it (?:ships|sells|loses) (?P<n>{q}) {u}",
          lambda m: (lambda x, d=int(m["n"]): x - d)),
-        (rf"it (?:receives|buys) (?P<n>\d+) (?:more )?{u}",
+        (rf"it (?:receives|buys) (?P<n>{q}) (?:more )?{u}",
          lambda m: (lambda x, d=int(m["n"]): x + d)),
     ]
     return [(re.compile(p, re.IGNORECASE), make) for p, make in patterns]
@@ -56,6 +62,12 @@ def _operations(unit: str) -> list[tuple[re.Pattern, Callable[[re.Match], Step]]
 
 def _sentences(text: str) -> list[str]:
     return [s.strip().rstrip(".").strip() for s in re.split(r"(?<=\.)\s+", text.strip()) if s.strip()]
+
+
+def _is_vague(match: re.Match) -> bool:
+    """В каком-то числовом поле вместо числа неопределённое количество."""
+    values = match.groupdict()
+    return any(values.get(g) is not None and not values[g].isdigit() for g in _NUMBER_GROUPS)
 
 
 @register("math")
@@ -73,15 +85,21 @@ def warehouse_stock(task: Task, workdir: Path) -> FastAnswer | None:
 
     operations = _operations(start["unit"])
     steps: list[Step] = []
+    vague = _is_vague(start)
     for sentence in sentences[1:]:
         body = _CONNECTOR_RE.sub("", sentence)
         for pattern, make in operations:
             match = pattern.fullmatch(body)
             if match:
-                steps.append(make(match))
+                if _is_vague(match):
+                    vague = True
+                else:
+                    steps.append(make(match))
                 break
         else:
             return None  # незнакомая операция
+    if vague:
+        return FastAnswer(None, infeasible=True, note="warehouse_stock: unknown quantity")
 
     stock = int(start["n"])
     for step in steps:

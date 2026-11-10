@@ -52,4 +52,4 @@ def try_solve(task: Task, workdir: Path) -> FastAnswer | None:
 
 
 # Регистрация решателей (импорт ради побочного эффекта @register).
-from harness.fastpath import data_analysis, math_tasks  # noqa: E402,F401
+from harness.fastpath import data_analysis, math_tasks, search  # noqa: E402,F401
