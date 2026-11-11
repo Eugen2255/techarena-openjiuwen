@@ -11,9 +11,9 @@ from __future__ import annotations
 import ast
 import logging
 import re
-from dataclasses import dataclass
 from pathlib import Path
 
+from harness.answers import Outcome, says_infeasible
 from harness.config import Settings
 from harness.meter import TokenMeter
 from harness.shell import run_command
@@ -32,15 +32,6 @@ If the tests contradict each other and cannot all pass, reply with the single wo
 
 _FENCE_RE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL)
 _DROP_LINE_RE = re.compile(r"^(?:[=-]{10,}|Traceback \(most recent call last\):|  File \".*|[-+?] .*|\.*[FE.]*\.*)$")
-
-
-@dataclass
-class CodingOutcome:
-    answer: str | None
-    infeasible: bool = False
-    local_ok: bool | None = None
-    note: str = ""
-    final_text: str = ""
 
 
 def compact_test_output(output: str, limit: int = 1500) -> str:
@@ -135,7 +126,7 @@ def _extract_code(reply: str) -> str:
     return "\n\n".join(blocks) if blocks else reply
 
 
-async def solve_coding(task: Task, settings: Settings, meter: TokenMeter, model_name: str) -> CodingOutcome | None:
+async def solve_coding(task: Task, settings: Settings, meter: TokenMeter, model_name: str) -> Outcome | None:
     workdir = task.workspace
     if workdir is None:
         return None
@@ -148,9 +139,9 @@ async def solve_coding(task: Task, settings: Settings, meter: TokenMeter, model_
 
     passed, output = await _run_tests(tests, workdir, settings)
     if passed:
-        return CodingOutcome("DONE", local_ok=True, note="coding: tests already pass")
+        return Outcome("DONE", local_ok=True, note="coding: tests already pass")
     if contradictory_tests(test_texts):
-        return CodingOutcome(None, infeasible=True, note="coding: contradictory tests")
+        return Outcome(None, infeasible=True, note="coding: contradictory tests")
 
     from harness.llm import make_model  # openJiuwen нужен только здесь; помощники выше тестируются без него
 
@@ -165,8 +156,8 @@ async def solve_coding(task: Task, settings: Settings, meter: TokenMeter, model_
         message = await model.invoke([{"role": "system", "content": SYSTEM_PROMPT},
                                       {"role": "user", "content": "\n\n".join(parts)}])
         reply = str(getattr(message, "content", "") or "")
-        if reply.strip().strip(".").upper() == "INFEASIBLE":
-            return CodingOutcome(None, infeasible=True, note="coding: model says infeasible", final_text=reply)
+        if says_infeasible(reply):
+            return Outcome(None, infeasible=True, note="coding: model says infeasible", final_text=reply)
         patched = apply_functions(source, _extract_code(reply))
         if patched is None:
             log.info("[%s] coding attempt %d: no usable code in reply", task.task_id, attempt)
@@ -174,5 +165,5 @@ async def solve_coding(task: Task, settings: Settings, meter: TokenMeter, model_
         module.write_text(patched, encoding="utf-8")
         passed, output = await _run_tests(tests, workdir, settings)
         if passed:
-            return CodingOutcome("DONE", local_ok=True, note=f"coding: fixed in {attempt} call(s)", final_text=reply)
-    return CodingOutcome(None, local_ok=False, note="coding: tests still fail, answer withheld", final_text=reply)
+            return Outcome("DONE", local_ok=True, note=f"coding: fixed in {attempt} call(s)", final_text=reply)
+    return Outcome(None, local_ok=False, note="coding: tests still fail, answer withheld", final_text=reply)

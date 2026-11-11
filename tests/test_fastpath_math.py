@@ -58,6 +58,8 @@ class VariantsTest(unittest.TestCase):
                           "How many boxes does it have at the end?",
         "vague split": "A warehouse starts with 500 boxes. Then the stock is split equally into several warehouses "
                        "and it keeps one share (rounded down). How many boxes does it have at the end?",
+        "split into zero": "A warehouse starts with 100 boxes. Then the stock is split equally into 0 warehouses "
+                           "and it keeps one share (rounded down). How many boxes does it have at the end?",
     }
     REFUSED = {
         "vague but unknown operation": "A warehouse starts with 100 boxes. Then some of the stock is lost. "
@@ -66,8 +68,6 @@ class VariantsTest(unittest.TestCase):
                           "It receives 2 deliveries of 87 boxes each. How many boxes does it have at the end?",
         "unknown operation": "A warehouse starts with 100 boxes. Then 10% of the stock is lost. "
                              "How many boxes does it have at the end?",
-        "split into zero": "A warehouse starts with 100 boxes. Then the stock is split equally into 0 warehouses "
-                           "and it keeps one share (rounded down). How many boxes does it have at the end?",
         "no rounding rule": "A warehouse starts with 100 boxes. Then the stock is split equally into 3 warehouses "
                             "and it keeps one share. How many boxes does it have at the end?",
         "other unit": "A warehouse starts with 100 boxes. It receives 2 deliveries of 10 crates each. "

@@ -33,9 +33,9 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(estimator.detect_route(task), "coding:contradiction")
         self.assertEqual(estimator.estimate(task, params={}).cost, 0)
 
-    def test_agent_route(self):
+    def test_oneshot_route(self):
         task = tasks("tasks_custom")["data_analysis_x001"]
-        self.assertEqual(estimator.detect_route(task), "agent:data_analysis")
+        self.assertEqual(estimator.detect_route(task), "oneshot:data_analysis")
 
 
 class PredictTest(unittest.TestCase):

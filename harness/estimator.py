@@ -3,7 +3,7 @@
 Работает только по task.json и файлам задачи, без LLM и без запуска кода задачи.
 Два уровня:
   1. Маршрут — теми же проверками, что у харнесса: быстрый путь (0 токенов), противоречивые тесты coding (0),
-     coding за один вызов, цикл агента по типу задачи.
+     coding или другой тип за один вызов (oneshot), цикл агента по типу задачи.
   2. Внутри маршрута — линейная модель по статическим признакам (параметры — harness/estimator_params.json,
      их подбирает scripts/fit_estimator.py по траекториям). Без файла параметров — априорные средние.
 Кроме точечной оценки даём верхнюю (upper): организаторы обещали штраф за недооценку.
@@ -16,11 +16,13 @@ from pathlib import Path
 
 from harness import fastpath
 from harness.coding import MAX_SOURCE_BYTES, contradictory_tests
+from harness.oneshot import supports_oneshot
 from harness.tasks import Task
 
 PARAMS_PATH = Path(__file__).with_name("estimator_params.json")
-# Априорные средние по маршрутам (замеры 10–11.11 на qwen3.8-27b-noreason) — пока нет подобранных параметров.
-DEFAULT_COST = {"coding": 110, "agent:data_analysis": 300, "agent:math": 220, "agent:search": 480}
+# Априорные средние по маршрутам (замеры на qwen3.8-27b-noreason) — пока нет подобранных параметров.
+DEFAULT_COST = {"coding": 110, "oneshot:math": 70, "oneshot:data_analysis": 100, "oneshot:search": 100,
+                "agent:data_analysis": 300, "agent:math": 220, "agent:search": 480}
 DEFAULT_AGENT_COST = 400
 DEFAULT_UPPER_FACTOR = 2.0
 MIN_LLM_COST = 20
@@ -79,6 +81,8 @@ def detect_route(task: Task) -> str:
             if contradictory_tests([_read(t) for t in tests]):
                 return "coding:contradiction"
             return "coding"
+    if supports_oneshot(task):
+        return f"oneshot:{task.task_type}"
     return f"agent:{task.task_type}"
 
 

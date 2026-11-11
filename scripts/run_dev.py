@@ -105,6 +105,10 @@ def main() -> int:
     except subprocess.TimeoutExpired:
         code = "timeout"
     print(f"harness exit code: {code}, {time.monotonic() - started:.0f}s", flush=True)
+    if code != 0:
+        # Иначе оценка покажет, например, «infeasible correctly skipped» просто потому, что ответов нет вовсе.
+        print("Харнесс завершился с ошибкой (Docker не запущен? нет ключа?) — оценку не запускаем.", file=sys.stderr)
+        return 1
 
     return subprocess.run([sys.executable, str(REPO / "scripts" / "evaluate.py"), str(tasks_dir),
                            "--original", str(args.tasks.resolve()), "--logs", str(logs_dir)]).returncode

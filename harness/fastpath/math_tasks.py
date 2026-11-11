@@ -7,8 +7,8 @@
   How many boxes does it have at the end? Compute it with the bash tool ...
 
 Каждое предложение условия должно целиком совпасть с одним из шаблонов ниже, иначе — None (решит агент).
-Если вместо числа стоит неопределённое количество («an unknown number of», «some»…), а всё остальное разобрано,
-задача невыполнима: точно посчитать нельзя. Запас, ушедший в минус, и деление на 0 отдаём агенту.
+Если вместо числа стоит неопределённое количество («an unknown number of», «some»…) или запас делят на 0 складов,
+а всё остальное разобрано, задача невыполнима: точно посчитать нельзя. Запас, ушедший в минус, отдаём агенту.
 """
 from __future__ import annotations
 
@@ -86,6 +86,7 @@ def warehouse_stock(task: Task, workdir: Path) -> FastAnswer | None:
     operations = _operations(start["unit"])
     steps: list[Step] = []
     vague = _is_vague(start)
+    zero_split = False
     for sentence in sentences[1:]:
         body = _CONNECTOR_RE.sub("", sentence)
         for pattern, make in operations:
@@ -93,6 +94,8 @@ def warehouse_stock(task: Task, workdir: Path) -> FastAnswer | None:
             if match:
                 if _is_vague(match):
                     vague = True
+                elif match.groupdict().get("parts") == "0":
+                    zero_split = True  # деление на 0 складов не определено
                 else:
                     steps.append(make(match))
                 break
@@ -100,6 +103,8 @@ def warehouse_stock(task: Task, workdir: Path) -> FastAnswer | None:
             return None  # незнакомая операция
     if vague:
         return FastAnswer(None, infeasible=True, note="warehouse_stock: unknown quantity")
+    if zero_split:
+        return FastAnswer(None, infeasible=True, note="warehouse_stock: split into 0 warehouses")
 
     stock = int(start["n"])
     for step in steps:

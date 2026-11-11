@@ -94,6 +94,8 @@ def consistent(solver: str, route: str, cost: float) -> bool:
     if solver == "coding":
         # Противоречивые тесты теперь отсеиваются без LLM; старые записи с расходом устарели.
         return route == "coding" or (route == "coding:contradiction" and cost == 0)
+    if solver == "oneshot":
+        return route.startswith("oneshot:")
     return solver == "llm" and route.startswith("agent:")
 
 

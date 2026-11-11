@@ -12,18 +12,16 @@ from pathlib import Path
 from openjiuwen.core.runner import Runner
 from openjiuwen.core.single_agent import AgentCard, ReActAgent, ReActAgentConfig
 
-from harness.answers import normalize_answer
-from harness.coding import solve_coding
+from harness.answers import INFEASIBLE, is_infeasible, normalize_answer
 from harness.config import Settings
 from harness.llm import client_config, make_model, request_config
 from harness.meter import TokenMeter, Usage
-from harness.tasks import Task
+from harness.oneshot import solve_oneshot
 from harness.shell import run_command
+from harness.tasks import Task
 from harness.tools import make_bash_tool
 
 log = logging.getLogger(__name__)
-
-INFEASIBLE = "INFEASIBLE"
 
 SYSTEM_PROMPT = f"""You solve one small task in a sandbox directory using the `bash` tool.
 - Be brief. Prefer a single command that computes the result (e.g. python3 -c '...').
@@ -36,7 +34,6 @@ SYSTEM_PROMPT = f"""You solve one small task in a sandbox directory using the `b
 QUERY_FOOTER = "(Reply with `ANSWER: <answer>`; the harness writes answer.txt for you.)"
 
 _ANSWER_RE = re.compile(r"ANSWER:\s*(.+)", re.IGNORECASE)
-_INFEASIBLE_MARKERS = {INFEASIBLE, "IMPOSSIBLE", "UNSOLVABLE", "CANNOT BE DETERMINED", "UNKNOWN", "N/A"}
 
 
 @dataclass
@@ -44,7 +41,7 @@ class SolveResult:
     task_id: str
     task_type: str
     reward: float
-    solver: str                      # "fastpath" или "llm"
+    solver: str                      # "fastpath", "coding", "oneshot" или "llm" (цикл агента)
     model: str | None = None
     answer: str | None = None        # None — answer.txt не создаём
     infeasible: bool = False
@@ -149,10 +146,6 @@ def extract_answer(workdir: Path, final_text: str) -> str | None:
     return None
 
 
-def is_infeasible(answer: str) -> bool:
-    return answer.strip().strip(".").upper() in _INFEASIBLE_MARKERS
-
-
 async def local_check(task: Task, workdir: Path, answer: str, settings: Settings) -> bool | None:
     """Проверка без LLM. None — проверить нечем."""
     if task.task_type == "coding" or task.check == "unittest":
@@ -206,14 +199,13 @@ async def solve(task: Task, settings: Settings, meter: TokenMeter) -> SolveResul
     had_stray = stray_answer.exists()
     tool = None
     try:
-        if task.task_type == "coding":
-            # Сначала дешёвый путь в один вызов; агент — только если раскладка задачи непривычная.
-            outcome = await solve_coding(task, settings, meter, model_name)
-            if outcome is not None:
-                result.solver = "coding"
-                result.answer, result.infeasible, result.local_ok = outcome.answer, outcome.infeasible, outcome.local_ok
-                result.note, result.final_text = outcome.note, outcome.final_text
-                return result
+        # Сначала один вызов (harness/oneshot.py, harness/coding.py); цикл агента — только если он не справился.
+        outcome = await solve_oneshot(task, settings, meter, model_name)
+        if outcome is not None:
+            result.solver = "coding" if task.task_type == "coding" else "oneshot"
+            result.answer, result.infeasible, result.local_ok = outcome.answer, outcome.infeasible, outcome.local_ok
+            result.note, result.final_text = outcome.note, outcome.final_text
+            return result
         context = await gather_context(task, workdir, settings)
         query = "\n\n".join(p for p in (task.instruction, context, QUERY_FOOTER) if p)
         agent, tool = _build_agent(task, workdir, settings, meter, model_name)

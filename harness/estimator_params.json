@@ -1,55 +1,55 @@
 {
-  "fitted_at": "2026-11-11 01:09",
+  "fitted_at": "2026-11-12 00:09",
   "fitted_on": [
-    "trajectories/estimator_dataset.jsonl"
+    "20261112_000457",
+    "20261112_000614",
+    "20261112_000804"
   ],
-  "n_records": 336,
+  "n_records": 350,
   "routes": {
-    "agent:data_analysis": {
-      "intercept": 308.1059,
+    "coding": {
+      "intercept": 95.6667,
       "coef": {},
-      "upper_factor": 1.756,
+      "upper_factor": 1.366,
+      "n": 66,
+      "mean_cost": 95.7,
+      "loo_mae": 22.9,
+      "loo_mape": 0.277,
+      "loo_under": 0.5,
+      "loo_upper_under": 0.091
+    },
+    "oneshot:data_analysis": {
+      "intercept": 79.3588,
+      "coef": {},
+      "upper_factor": 1.54,
       "n": 34,
-      "mean_cost": 308.1,
-      "loo_mae": 111.2,
-      "loo_mape": 0.347,
-      "loo_under": 0.294,
+      "mean_cost": 79.4,
+      "loo_mae": 48.1,
+      "loo_mape": 0.301,
+      "loo_under": 0.706,
       "loo_upper_under": 0.088
     },
-    "agent:math": {
-      "intercept": 181.5189,
-      "coef": {
-        "instruction_chars": 0.100068
-      },
-      "upper_factor": 1.326,
-      "n": 25,
-      "mean_cost": 230.5,
-      "loo_mae": 48.7,
-      "loo_mape": 0.195,
-      "loo_under": 0.24,
-      "loo_upper_under": 0.08
-    },
-    "agent:search": {
-      "intercept": 378.08,
+    "oneshot:math": {
+      "intercept": 53.6158,
       "coef": {},
-      "upper_factor": 1.702,
+      "upper_factor": 1.468,
+      "n": 19,
+      "mean_cost": 53.6,
+      "loo_mae": 24.2,
+      "loo_mape": 0.634,
+      "loo_under": 0.474,
+      "loo_upper_under": 0.053
+    },
+    "oneshot:search": {
+      "intercept": 101.82,
+      "coef": {},
+      "upper_factor": 1.15,
       "n": 5,
-      "mean_cost": 378.1,
-      "loo_mae": 116.7,
-      "loo_mape": 0.336,
-      "loo_under": 0.6,
+      "mean_cost": 101.8,
+      "loo_mae": 6.1,
+      "loo_mape": 0.058,
+      "loo_under": 0.4,
       "loo_upper_under": 0.0
-    },
-    "coding": {
-      "intercept": 96.1818,
-      "coef": {},
-      "upper_factor": 1.349,
-      "n": 66,
-      "mean_cost": 96.2,
-      "loo_mae": 23.2,
-      "loo_mape": 0.281,
-      "loo_under": 0.515,
-      "loo_upper_under": 0.091
     }
   }
 }
