@@ -49,45 +49,16 @@ class SupportTest(unittest.TestCase):
         self.assertFalse(oneshot.supports_oneshot(EXAMPLES["coding_0003"]))  # у coding своя схема
 
 
-class MissingQuantityTest(unittest.TestCase):
-    COLUMNS = ["order_id", "region", "product", "month", "units", "price"]
+class PrecheckAndPromptTest(unittest.TestCase):
+    def test_no_text_rules_before_llm(self):
+        # Правило по словам вопроса ошибалось на выполнимых задачах нового вида — невыполнимость решает модель.
+        for task in [*EXAMPLES.values(), *CUSTOM.values()]:
+            with self.subTest(task=task.task_id):
+                self.assertIsNone(oneshot.precheck_infeasible(task))
 
-    def test_quantity_without_column(self):
-        question = "What was the total discount given on product 'widget' in months 7 through 8 inclusive?"
-        self.assertEqual(oneshot.missing_quantity(question, self.COLUMNS), "discount")
-        self.assertEqual(oneshot.missing_quantity("What is the average rating of 'gizmo'?", self.COLUMNS), "rating")
-
-    def test_event_or_concept_without_column(self):
-        cases = {
-            "How many units of product 'widget' were returned in months 2 through 3 inclusive?": "returned",
-            "How much profit did product 'gizmo' make in months 1 through 4 inclusive?": "profit",
-            "Which customer bought the most units of product 'widget'?": "customer",
-            "What was the shipping cost of order 17?": "shipping",
-        }
-        for question, word in cases.items():
-            with self.subTest(question=question):
-                self.assertEqual(oneshot.missing_quantity(question, self.COLUMNS), word)
-
-    def test_concept_defined_in_question_or_present_as_column(self):
-        self.assertIsNone(oneshot.missing_quantity(
-            "What was the total cost (units times price) of product 'widget'?", self.COLUMNS))
-        self.assertIsNone(oneshot.missing_quantity(
-            "How many units of 'widget' were returned in month 3?", self.COLUMNS + ["returned_units"]))
-        self.assertIsNone(oneshot.missing_quantity(
-            "Which customer bought the most units?", self.COLUMNS + ["customer"]))
-
-    def test_feasible_questions_pass(self):
-        for question in (
-            "What was the total revenue (units times price) from product 'widget' in months 1 through 3 inclusive?",
-            "How many units were sold in region 'north' in months 2 through 4 inclusive?",
-            "How many orders of product 'gizmo' were placed in the 'east' region?",
-            "What is the total number of units sold in month 5?",
-            "What is the average price of product 'widget'?",
-            "What is the total units of product 'widget'?",
-            "What is the total sales of product 'widget'?",
-        ):
-            with self.subTest(question=question):
-                self.assertIsNone(oneshot.missing_quantity(question, self.COLUMNS))
+    def test_math_prompt_follows_check(self):
+        self.assertIn("final answer (an integer).", oneshot.MATH_PROMPT.format(kind=" (an integer)"))
+        self.assertIn("final answer.", oneshot.MATH_PROMPT.format(kind=""))
 
 
 class ReplyParsingTest(unittest.TestCase):

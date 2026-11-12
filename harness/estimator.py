@@ -80,7 +80,7 @@ def detect_route(task: Task) -> str:
         tests = sorted(task.workspace.glob("test_*.py"))
         modules = [p for p in task.workspace.glob("*.py") if not p.name.startswith("test_")]
         if tests and len(modules) == 1 and modules[0].stat().st_size <= MAX_SOURCE_BYTES:
-            if contradictory_tests([_read(t) for t in tests]):
+            if contradictory_tests([_read(t) for t in tests], _read(modules[0])):
                 return "coding:contradiction"
             return "coding"
     if supports_oneshot(task):

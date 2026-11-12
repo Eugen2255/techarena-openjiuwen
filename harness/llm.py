@@ -8,7 +8,7 @@ import re
 
 from openjiuwen.core.foundation.llm import Model, ModelClientConfig, ModelRequestConfig
 
-from harness.config import Settings
+from harness.config import Settings, is_reasoning
 from harness.meter import INPUT_WEIGHT, BudgetExceeded, TokenMeter
 
 log = logging.getLogger(__name__)
@@ -23,6 +23,8 @@ _RETRYABLE_RE = re.compile(
     r"APITimeoutError|timed out|APIConnectionError|Connection error",
     re.IGNORECASE,
 )
+# Таймаут: модель могла сгенерировать ответ до обрыва, и прокси посчитает его выход.
+_TIMEOUT_RE = re.compile(r"APITimeoutError|timed out|Timeout", re.IGNORECASE)
 
 
 class RateLimiter:
@@ -85,12 +87,15 @@ class MeteredModel(Model):
         self._limiter = limiter
         self._max_output_tokens = max_output_tokens
 
-    def _worst_case_cost(self, args, kwargs) -> float:
-        """Сверху оценивает стоимость вызова: вход по длине сообщений (~3 символа на токен,
-        с запасом на описание инструментов) плюс полный потолок выхода."""
+    @staticmethod
+    def _approx_input_tokens(args, kwargs) -> float:
+        """Вход по длине сообщений: ~3 символа на токен, с запасом на описание инструментов."""
         messages = args[0] if args else kwargs.get("messages", "")
-        approx_input = len(str(messages)) / 3 + 500
-        return self._max_output_tokens + approx_input * INPUT_WEIGHT
+        return len(str(messages)) / 3 + 500
+
+    def _worst_case_cost(self, args, kwargs) -> float:
+        """Сверху оценивает стоимость вызова: оценка входа плюс полный потолок выхода."""
+        return self._max_output_tokens + self._approx_input_tokens(args, kwargs) * INPUT_WEIGHT
 
     async def _reserve(self, worst_case: float) -> None:
         """Резервирует бюджет на вызов. Если мешают только резервы идущих вызовов, ждёт их окончания."""
@@ -114,6 +119,10 @@ class MeteredModel(Model):
                     await self._limiter.wait()
                     message = await super().invoke(*args, **kwargs)
             except Exception as exc:  # noqa: BLE001 — решаем ниже, повторять или пробрасывать
+                # Ушедший запрос прокси считает и при ошибке: списываем оценку входа, при таймауте — и потолок выхода.
+                timeout = bool(_TIMEOUT_RE.search(_error_chain(exc)))
+                self._meter.charge(self._task_id, self._approx_input_tokens(args, kwargs),
+                                   self._max_output_tokens if timeout else 0)
                 if attempt == MAX_RETRIES or not _is_retryable(exc):
                     raise
                 delay = 2 ** attempt + random.random()
@@ -151,8 +160,12 @@ def client_config(settings: Settings) -> ModelClientConfig:
     )
 
 
+def max_output_tokens(settings: Settings, model_name: str) -> int:
+    return settings.max_output_tokens_reasoning if is_reasoning(model_name) else settings.max_output_tokens
+
+
 def request_config(settings: Settings, model_name: str) -> ModelRequestConfig:
-    return ModelRequestConfig(model=model_name, temperature=0.0, max_tokens=settings.max_output_tokens)
+    return ModelRequestConfig(model=model_name, temperature=0.0, max_tokens=max_output_tokens(settings, model_name))
 
 
 def make_model(settings: Settings, meter: TokenMeter, task_id: str, model_name: str) -> MeteredModel:
@@ -160,7 +173,7 @@ def make_model(settings: Settings, meter: TokenMeter, task_id: str, model_name: 
         meter=meter,
         task_id=task_id,
         limiter=_get_limiter(settings),
-        max_output_tokens=settings.max_output_tokens,
+        max_output_tokens=max_output_tokens(settings, model_name),
         model_client_config=client_config(settings),
         model_config=request_config(settings, model_name),
     )

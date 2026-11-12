@@ -33,10 +33,11 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(estimator.detect_route(task), "coding:contradiction")
         self.assertEqual(estimator.estimate(task, params={}).cost, 0)
 
-    def test_precheck_route_is_free(self):
-        task = tasks("tasks_custom")["data_analysis_x001"]  # вопрос про колонку discount, которой нет
-        self.assertEqual(estimator.detect_route(task), "precheck")
-        self.assertEqual(estimator.estimate(task, params={}).cost, 0)
+    def test_missing_column_goes_to_llm(self):
+        # Вопрос про колонку discount, которой нет: правил по тексту до вызова LLM больше нет, решает модель.
+        task = tasks("tasks_custom")["data_analysis_x001"]
+        self.assertEqual(estimator.detect_route(task), "oneshot:data_analysis")
+        self.assertGreater(estimator.estimate(task, params={}).cost, 0)
 
     def test_oneshot_route(self):
         example = tasks("tasks_examples")["data_analysis_0002"]

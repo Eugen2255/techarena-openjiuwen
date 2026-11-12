@@ -80,8 +80,8 @@ def workdir_for(task: Task) -> Path:
 
 
 def choose_model(task: Task, settings: Settings) -> str:
-    # TODO: выбор модели по типу задачи и оценке сложности (pipeline.md, раздел 4.3).
-    return settings.model
+    """math — модель с рассуждениями (точнее на новых формулировках), остальное — без рассуждений (config.py)."""
+    return settings.math_model if task.task_type == "math" else settings.model
 
 
 async def gather_context(task: Task, workdir: Path, settings: Settings) -> str:

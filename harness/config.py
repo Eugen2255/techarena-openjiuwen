@@ -18,7 +18,15 @@ MODELS = (
     "qwen3.6-35b-a3b-noreason",
 )
 DEFAULT_MODEL = "qwen3.8-27b-noreason"
+# math — модель с рассуждениями: на задачах нового вида 68/69 против 58/69 у -noreason при ×3 токенах
+# (путает отданную и оставшуюся часть: «half are given away», «one third is moved»). README, «Выбор модели».
+MATH_MODEL = "qwen3.8-27b"
 DEFAULT_BUDGET = 100_000  # бюджет соревнования; в команде запуска BUDGET сейчас не передаётся
+
+
+def is_reasoning(model: str) -> bool:
+    """Модель с рассуждениями: её токены рассуждений входят в выход, и ей нужен больший потолок выхода."""
+    return not model.endswith("-noreason")
 
 
 @dataclass(frozen=True)
@@ -29,6 +37,7 @@ class Settings:
     llm_api_key: str
     verify_ssl: bool
     model: str
+    math_model: str
     workers: int
     time_limit_s: float
     task_timeout_s: float
@@ -40,6 +49,7 @@ class Settings:
     requests_per_minute: float
     llm_concurrency: int
     max_output_tokens: int
+    max_output_tokens_reasoning: int
     log_dir: Path
 
 
@@ -68,6 +78,7 @@ def parse_settings(argv: list[str] | None = None) -> Settings:
         llm_api_key=os.getenv("LLM_API_KEY", ""),
         verify_ssl=os.getenv("HARNESS_VERIFY_SSL", "1") != "0",
         model=os.getenv("HARNESS_MODEL", DEFAULT_MODEL),
+        math_model=os.getenv("HARNESS_MATH_MODEL", MATH_MODEL),
         workers=_env_int("HARNESS_WORKERS", 5),
         # Прогон обрывают через час; оставляем запас на завершение.
         time_limit_s=_env_float("HARNESS_TIME_LIMIT", 55 * 60),
@@ -86,5 +97,7 @@ def parse_settings(argv: list[str] | None = None) -> Settings:
         # Потолок выхода одного вызова: ограничивает худшую стоимость вызова для резерва бюджета.
         # Для моделей с рассуждениями его придётся поднять: рассуждения входят в выходные токены.
         max_output_tokens=_env_int("HARNESS_MAX_OUTPUT_TOKENS", 2048),
+        # Рассуждения входят в выход: на math в среднем ~230 выходных токенов, потолок с запасом.
+        max_output_tokens_reasoning=_env_int("HARNESS_MAX_OUTPUT_TOKENS_REASONING", 4096),
         log_dir=Path(os.getenv("HARNESS_LOG_DIR", "/tmp/harness_logs")),
     )

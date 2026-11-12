@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import logging
 import re
+import textwrap
 from pathlib import Path
 
 from harness.answers import Outcome, says_infeasible
@@ -27,7 +28,8 @@ MAX_SOURCE_BYTES = 8000
 SYSTEM_PROMPT = """You fix bugs in a Python module so that its unit tests pass.
 Fix each function according to its name and intended meaning: hidden tests check general behaviour,
 so never special-case the visible test values. Do not change the tests.
-Reply ONLY with one ```python block containing the complete corrected definitions of the functions you changed.
+Reply ONLY with one ```python block containing the complete corrected definitions of the functions you changed
+(if you change a method, send its whole class).
 If the tests contradict each other and cannot all pass, reply with the single word INFEASIBLE."""
 
 _FENCE_RE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL)
@@ -45,6 +47,68 @@ def compact_test_output(output: str, limit: int = 1500) -> str:
 # Функции, у которых два одинаковых вызова законно дают разное (тест «значения различаются» не противоречив).
 _NONDETERMINISTIC_RE = re.compile(r"rand|uuid|time|token|nonce|shuffle|choice|sample|unique|counter|next_id",
                                   re.IGNORECASE)
+# Импорты тестов, которые не являются проверяемым модулем.
+_NOT_TESTED = {"unittest", "pytest", "sys", "os", "math", "random", "re", "io", "json", "collections", "itertools",
+               "functools", "typing", "pathlib", "string", "decimal", "fractions", "copy", "importlib"}
+
+
+def _tested_names(tree: ast.Module) -> tuple[set[str], set[str]]:
+    """Под какими именами тесты видят проверяемый модуль: (алиасы модуля, функции из from-импорта)."""
+    modules: set[str] = set()
+    functions: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(alias.asname or alias.name.split(".")[0] for alias in node.names
+                           if alias.name.split(".")[0] not in _NOT_TESTED)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.module.split(".")[0] not in _NOT_TESTED:
+            functions.update(alias.asname or alias.name for alias in node.names if alias.name != "*")
+    return modules, functions
+
+
+def stateful_functions(module_source: str) -> set[str]:
+    """Функции модуля, которые на одинаковый вызов могут вернуть разное: global/nonlocal, изменяемые значения
+    по умолчанию, обращение к переменным уровня модуля (кэш, счётчик)."""
+    try:
+        tree = ast.parse(module_source)
+    except SyntaxError:
+        return set()
+    module_vars = {target.id for node in tree.body if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign))
+                   for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+                   if isinstance(target, ast.Name)}
+    result = set()
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        defaults = [*node.args.defaults, *(d for d in node.args.kw_defaults if d is not None)]
+        if (any(isinstance(n, (ast.Global, ast.Nonlocal)) for n in ast.walk(node))
+                or any(not isinstance(d, ast.Constant) for d in defaults)
+                or any(isinstance(n, ast.Name) and n.id in module_vars for n in ast.walk(node))):
+            result.add(node.name)
+    return result
+
+
+def _tested_call(expr: ast.expr, modules: set[str], functions: set[str], stateful: set[str]) -> bool:
+    """Вызов функции проверяемого модуля с литералами в аргументах: m.f(1) или f(1) после from-импорта.
+
+    Переменные (result), методы объектов (s.pop()), классы, вызовы без аргументов и функции с состоянием
+    не берём: там одинаковый текст законно даёт разные значения."""
+    if not isinstance(expr, ast.Call) or not (expr.args or expr.keywords):
+        return False
+    func = expr.func
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id in modules:
+        name = func.attr
+    elif isinstance(func, ast.Name) and func.id in functions:
+        name = func.id
+    else:
+        return False
+    if name[:1].isupper() or name in stateful or _NONDETERMINISTIC_RE.search(name):
+        return False
+    try:
+        for arg in [*expr.args, *(k.value for k in expr.keywords)]:
+            ast.literal_eval(arg)
+    except (ValueError, SyntaxError, TypeError):
+        return False
+    return True
 
 
 def _comparison(name: str, args: list[ast.expr]) -> tuple[ast.expr, ast.expr, bool] | None:
@@ -60,36 +124,30 @@ def _comparison(name: str, args: list[ast.expr]) -> tuple[ast.expr, ast.expr, bo
     return None
 
 
-def _deterministic_call(expr: ast.expr) -> bool:
-    """Вызов с литералами в аргументах и «неслучайным» именем: два одинаковых вызова дают одно и то же."""
-    if not isinstance(expr, ast.Call):
-        return False
-    func = expr.func.attr if isinstance(expr.func, ast.Attribute) else getattr(expr.func, "id", "")
-    if not func or _NONDETERMINISTIC_RE.search(func):
-        return False
-    try:
-        for arg in [*expr.args, *(k.value for k in expr.keywords)]:
-            ast.literal_eval(arg)
-    except (ValueError, SyntaxError):
-        return False
-    return True
-
-
-def contradictory_tests(test_sources: list[str]) -> bool:
+def contradictory_tests(test_sources: list[str], module_source: str | None = None) -> bool:
     """Тесты не может пройти никакая честная реализация.
 
-    Понимает: один вызов ожидается с разными литералами (assertEqual(f(x), 5) и assertTrue(f(x) == 6));
-    литерал и ожидается, и запрещён (assertEqual(f(x), 5) и assertNotEqual(f(x), 5)); пару assertTrue(e) /
-    assertFalse(e); самосравнение детерминированного вызова (assertNotEqual(f(1), f(1)), assertFalse(f(1) == f(1))).
+    Смотрим только на вызовы функций проверяемого модуля с литералами в аргументах (см. _tested_call):
+    один вызов ожидается с разными значениями (assertEqual(f(x), 5) и assertTrue(f(x) == 6)); значение и
+    ожидается, и запрещено; пара assertTrue(e) / assertFalse(e); самосравнение (assertNotEqual(f(1), f(1))).
+    Правило нарочно осторожное: ложное «противоречие» стоит баллов за задачу, а верное экономит один вызов LLM
+    (баллов за распознанную невыполнимую задачу нет). module_source — исходник модуля, чтобы не трогать
+    функции с состоянием.
     """
-    expected: dict[str, set] = {}
-    forbidden: dict[str, set] = {}
+    stateful = stateful_functions(module_source) if module_source else set()
+    expected: dict[str, list] = {}
+    forbidden: dict[str, list] = {}
     truth: dict[str, set] = {}
     for source in test_sources:
         try:
             tree = ast.parse(source)
         except SyntaxError:
             return False
+        modules, functions = _tested_names(tree)
+
+        def tested(expr: ast.expr) -> bool:
+            return _tested_call(expr, modules, functions, stateful)
+
         for node in ast.walk(tree):
             if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
                 continue
@@ -97,47 +155,95 @@ def contradictory_tests(test_sources: list[str]) -> bool:
             comparison = _comparison(name, args)
             if comparison is not None:
                 left, right, equal = comparison
-                if not equal and ast.dump(left) == ast.dump(right) and _deterministic_call(left):
+                if not tested(left) and tested(right):
+                    left, right = right, left
+                if not tested(left):
+                    continue
+                if not equal and ast.dump(left) == ast.dump(right):
                     return True
                 try:
-                    value = repr(ast.literal_eval(right))
-                except (ValueError, SyntaxError):
+                    value = ast.literal_eval(right)
+                except (ValueError, SyntaxError, TypeError):
                     continue
-                (expected if equal else forbidden).setdefault(ast.dump(left), set()).add(value)
-            elif name in ("assertTrue", "assertFalse") and args:
+                (expected if equal else forbidden).setdefault(ast.dump(left), []).append(value)
+            elif name in ("assertTrue", "assertFalse") and args and tested(args[0]):
                 truth.setdefault(ast.dump(args[0]), set()).add(name == "assertTrue")
-    return (any(len(v) > 1 for v in expected.values())
-            or any(expected.get(k, set()) & v for k, v in forbidden.items())
+    # Сравниваем по ==, а не по тексту: 1 и 1.0 — одно и то же значение.
+    return (any(a != b for values in expected.values() for a in values for b in values)
+            or any(e == f for key, values in forbidden.items() for f in values for e in expected.get(key, []))
             or any(len(v) > 1 for v in truth.values()))
 
 
+_FUNCS = (ast.FunctionDef, ast.AsyncFunctionDef)
+_DEFS = (*_FUNCS, ast.ClassDef)
+
+
+def _span(node: ast.AST) -> tuple[int, int]:
+    """Строки определения вместе с декораторами — как срез lines[start:end]."""
+    return min([node.lineno] + [d.lineno for d in node.decorator_list]) - 1, node.end_lineno
+
+
+def _block(code: str, node: ast.AST, indent: int) -> list[str]:
+    """Определение из ответа модели (с декораторами), сдвинутое на indent пробелов — например, внутрь класса."""
+    start, end = _span(node)
+    text = textwrap.dedent("\n".join(code.splitlines()[start:end]))
+    return textwrap.indent(text, " " * indent).splitlines()
+
+
 def apply_functions(source: str, reply_code: str) -> str | None:
-    """Заменяет в модуле функции (и классы) с теми же именами, новые дописывает в конец, импорты — в начало."""
+    """Заменяет в модуле функции и классы с теми же именами, новые дописывает в конец, импорты — в начало.
+
+    Метод, присланный без класса (def pop(self): ...) или в неполном классе, ставится на место внутри своего класса.
+    """
     try:
         module, patch = ast.parse(source), ast.parse(reply_code)
     except SyntaxError:
         return None
-    replacements, additions, imports = {}, [], []
-    defined = {node.name: node for node in module.body
-               if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    defined = {node.name: node for node in module.body if isinstance(node, _DEFS)}
+    methods: dict[str, list[ast.AST]] = {}
+    for cls in module.body:
+        if isinstance(cls, ast.ClassDef):
+            for item in cls.body:
+                if isinstance(item, _FUNCS):
+                    methods.setdefault(item.name, []).append(item)
+    edits: list[tuple[int, int, list[str]]] = []  # (начало, конец, новые строки) — замена среза lines
+    additions, imports = [], []
     for node in patch.body:
-        segment = ast.get_source_segment(reply_code, node)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            if node.name in defined:
-                replacements[node.name] = segment
-            else:
-                additions.append(segment)
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            segment = ast.get_source_segment(reply_code, node)
             if segment not in source:
                 imports.append(segment)
-    if not replacements and not additions:
+            continue
+        if not isinstance(node, _DEFS):
+            continue
+        old = defined.get(node.name)
+        if isinstance(node, ast.ClassDef) and isinstance(old, ast.ClassDef):
+            old_methods = {i.name: i for i in old.body if isinstance(i, _FUNCS)}
+            new_methods = [i for i in node.body if isinstance(i, _FUNCS)]
+            if not new_methods or set(old_methods) <= {m.name for m in new_methods}:
+                edits.append((*_span(old), _block(reply_code, node, old.col_offset)))  # класс целиком
+                continue
+            for method in new_methods:  # неполный класс: только присланные методы
+                target = old_methods.get(method.name)
+                if target is not None:
+                    edits.append((*_span(target), _block(reply_code, method, target.col_offset)))
+                else:
+                    indent = next(iter(old_methods.values())).col_offset if old_methods else old.col_offset + 4
+                    edits.append((old.end_lineno, old.end_lineno, ["", *_block(reply_code, method, indent)]))
+        elif old is not None:
+            edits.append((*_span(old), _block(reply_code, node, old.col_offset)))
+        elif (isinstance(node, _FUNCS) and len(methods.get(node.name, [])) == 1
+              and node.args.args and node.args.args[0].arg == "self"):
+            target = methods[node.name][0]  # метод прислан без класса
+            edits.append((*_span(target), _block(reply_code, node, target.col_offset)))
+        else:
+            additions.append("\n".join(_block(reply_code, node, 0)))
+    if not edits and not additions:
         return None
 
     lines = source.splitlines()
-    for name in sorted(replacements, key=lambda n: defined[n].lineno, reverse=True):
-        node = defined[name]
-        first = min([node.lineno] + [d.lineno for d in node.decorator_list]) - 1
-        lines[first:node.end_lineno] = replacements[name].splitlines()
+    for start, end, new_lines in sorted(edits, key=lambda e: e[0], reverse=True):
+        lines[start:end] = new_lines
     result = "\n".join(lines).rstrip() + "\n"
     if additions:
         result += "\n\n" + "\n\n\n".join(additions) + "\n"
@@ -174,7 +280,7 @@ async def solve_coding(task: Task, settings: Settings, meter: TokenMeter, model_
     passed, output = await _run_tests(tests, workdir, settings)
     if passed:
         return Outcome("DONE", local_ok=True, note="coding: tests already pass")
-    if contradictory_tests(test_texts):
+    if contradictory_tests(test_texts, module.read_text(encoding="utf-8", errors="replace")):
         return Outcome(None, infeasible=True, note="coding: contradictory tests")
 
     from harness.llm import make_model  # openJiuwen нужен только здесь; помощники выше тестируются без него

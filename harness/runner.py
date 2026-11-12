@@ -16,7 +16,7 @@ from harness import STARTED_AT, estimator, fastpath
 from harness.config import Settings, parse_settings
 from harness.estimator import Estimate
 from harness.meter import TokenMeter
-from harness.solver import SolveResult, solve, workdir_for
+from harness.solver import SolveResult, choose_model, solve, workdir_for
 from harness.tasks import Task, load_tasks
 from harness.writer import AnswerWriter
 
@@ -136,7 +136,7 @@ class Run:
                                                     timeout=min(settings.task_timeout_s, left))
                 except asyncio.TimeoutError:
                     result = SolveResult(task.task_id, task.task_type, task.reward, solver="llm",
-                                         model=settings.model, error="timeout",
+                                         model=choose_model(task, settings), error="timeout",
                                          usage=meter.task_usage(task.task_id))
                 self.finish(task, result, estimate)
 

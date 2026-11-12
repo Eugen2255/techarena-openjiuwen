@@ -12,6 +12,12 @@
 
 Перефразировки специально включают формулировки, которые решатели быстрого пути не разбирают:
 так проверяется, что задача уходит агенту, а не получает неверный ответ.
+
+--novel-share — доля выполнимых задач «нового вида» (variant novel:*): другие сюжеты, вопросы, схемы данных,
+база знаний связным текстом, тесты с переменными, from-импортом и классами. Организаторы обещали в финале
+«новые и другие вопросы»; на таких задачах проверки без LLM должны молчать, а решать — модель.
+
+    python scripts/generate_tasks.py --count 120 --seed 21 --novel-share 1.0 --infeasible-share 0 --out tasks_generated_novel
 """
 from __future__ import annotations
 
@@ -21,6 +27,7 @@ import csv
 import io
 import json
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -390,6 +397,299 @@ def gen_coding(rng: random.Random, infeasible: str | None, paraphrase: bool) -> 
                      files, {} if infeasible else {"test_hidden.py": hidden_tests})
 
 
+# ---------------------------------------------------------------- задачи нового вида (--novel-share)
+
+NUMBER_WORDS = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven"}
+STORIES = [("A library", "books", "the library"), ("A bakery", "loaves", "the bakery"),
+           ("A parking garage", "cars", "the garage"), ("A farm", "eggs", "the farm"),
+           ("A school", "pencils", "the school"), ("A shop", "apples", "the shop")]
+DEPARTMENTS = ["sales", "engineering", "marketing", "support"]
+STATUSES = ["shipped", "returned", "cancelled"]
+
+
+def novel_math(rng: random.Random) -> Generated:
+    subject, unit, ref = rng.choice(STORIES)
+    while True:
+        start = rng.randint(200, 3000)
+        stock, sentences = start, []
+        for _ in range(rng.randint(2, 5)):
+            op = rng.choice(["minus", "plus", "times", "half", "third", "percent", "rate", "crates"])
+            if op == "minus":
+                n = rng.randint(5, 90)
+                sentences.append(rng.choice([f"Then {n} {unit} are taken away.", f"After that, {n} {unit} are sold."]))
+                stock -= n
+            elif op == "plus":
+                n = rng.randint(5, 90)
+                sentences.append(rng.choice([f"A delivery brings {n} more {unit}.", f"Then {ref} gets {n} new {unit}."]))
+                stock += n
+            elif op == "times":
+                k = rng.choice([2, 3])
+                sentences.append(f"Then {ref} {'doubles' if k == 2 else 'triples'} the number of {unit} it has.")
+                stock *= k
+            elif op == "half":
+                sentences.append(f"Then half of the {unit} are given away (if the number is odd, the extra one stays).")
+                stock -= stock // 2
+            elif op == "third":
+                sentences.append(f"Then one third of the {unit} (rounded down) are moved to another site.")
+                stock -= stock // 3
+            elif op == "percent":
+                p = rng.choice([10, 20, 25, 50])
+                sentences.append(f"Then {p}% of the {unit} are sold (the number sold is rounded down).")
+                stock -= stock * p // 100
+            elif op == "rate":
+                r, d = rng.randint(3, 30), rng.randint(2, 7)
+                days = NUMBER_WORDS[d] if rng.random() < 0.5 else str(d)
+                sentences.append(f"For the next {days} days, {r} {unit} are used up every day.")
+                stock -= r * d
+            else:
+                b, s = rng.randint(2, 6), rng.randint(5, 40)
+                sentences.append(f"It then receives {b} crates holding {s} {unit} apiece.")
+                stock += b * s
+            if stock < 0:
+                break
+        if stock >= 0:
+            break
+    question = rng.choice([f"How many {unit} does {ref} have now?", f"What is the final number of {unit}?",
+                           f"How many {unit} are left at the end?"])
+    text = (f"{subject} has {start} {unit}. " + " ".join(sentences) + f" {question}"
+            " Compute it with the bash tool (python3 -c). " + WORK_TAIL)
+    return Generated("math", text, str(stock), "exact_int", "novel:story")
+
+
+def _csv_text(rows: list[dict]) -> str:
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=list(rows[0]), lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    return out.getvalue()
+
+
+def _unique_best(totals: dict) -> object | None:
+    """Ключ с наибольшим значением, если он единственный (ничья — переделываем задачу)."""
+    ranked = sorted(totals.values(), reverse=True)
+    return max(totals, key=totals.get) if len(ranked) < 2 or ranked[0] != ranked[1] else None
+
+
+def novel_data_analysis(rng: random.Random) -> Generated:
+    kind = rng.choice(["revenue", "avg_price", "top_region", "orders_over", "distinct_products", "max_units",
+                       "best_month", "cost_over", "total_modifier", "avg_salary", "older_in_city", "dept_salary",
+                       "status_returned", "status_cancelled"])
+    while True:
+        n_rows, check = rng.choice([20, 40, 80, 150]), "exact_int"
+        if kind in ("avg_salary", "older_in_city", "dept_salary"):
+            name = "employees.csv"
+            rows = [{"employee_id": i + 1, "name": f"{rng.choice(FIRST_NAMES)} {rng.choice(LAST_NAMES)}",
+                     "department": rng.choice(DEPARTMENTS), "salary": rng.randrange(30000, 150000, 500),
+                     "age": rng.randint(21, 65), "city": rng.choice(CITIES[:5])} for i in range(n_rows)]
+            dept, city, age = rng.choice(DEPARTMENTS), rng.choice(CITIES[:5]), rng.randint(30, 50)
+            salaries = [r["salary"] for r in rows if r["department"] == dept]
+            if kind == "avg_salary":
+                question = f"What is the average salary in the '{dept}' department, rounded down to a whole number?"
+                answer = sum(salaries) // len(salaries) if salaries else None
+            elif kind == "older_in_city":
+                question = f"How many employees older than {age} work in {city}?"
+                answer = sum(1 for r in rows if r["age"] > age and r["city"] == city)
+            else:
+                question = f"What is the total salary paid to the '{dept}' department?"
+                answer = sum(salaries) if salaries else None
+        elif kind in ("status_returned", "status_cancelled"):
+            name = "orders.csv"  # возвраты здесь есть — в колонке status
+            rows = [{"order_id": i + 1, "product": rng.choice(PRODUCTS), "status": rng.choice(STATUSES),
+                     "units": rng.randint(1, 30)} for i in range(n_rows)]
+            product = rng.choice(PRODUCTS)
+            if kind == "status_returned":
+                question = f"How many units of product '{product}' were returned?"
+                answer = sum(r["units"] for r in rows if r["product"] == product and r["status"] == "returned")
+            else:
+                question = "How many orders were cancelled?"
+                answer = sum(1 for r in rows if r["status"] == "cancelled")
+        else:
+            name = "sales.csv"
+            rows = [{"order_id": i + 1, "region": rng.choice(REGIONS), "product": rng.choice(PRODUCTS[:4]),
+                     "month": rng.randint(1, 12), "units": rng.randint(1, 40), "price": rng.randint(5, 100)}
+                    for i in range(n_rows)]
+            product, region = rng.choice(PRODUCTS[:4]), rng.choice(REGIONS)
+            first = rng.randint(1, 10)
+            last = rng.randint(first + 1, min(12, first + 3))
+            mine = [r for r in rows if r["product"] == product]
+            if kind == "revenue":  # выручка без расшифровки «units times price»
+                question = f"What was the total revenue from product '{product}' in months {first} through {last} inclusive?"
+                answer = sum(r["units"] * r["price"] for r in mine if first <= r["month"] <= last)
+            elif kind == "avg_price":
+                question = f"What is the average price of the '{product}' orders, rounded down to a whole number?"
+                answer = sum(r["price"] for r in mine) // len(mine) if mine else None
+            elif kind == "top_region":
+                question = f"Which region sold the most units of product '{product}'?"
+                answer = _unique_best({g: sum(r["units"] for r in mine if r["region"] == g) for g in REGIONS})
+                check = "exact_str"
+            elif kind == "orders_over":
+                n = rng.randint(10, 30)
+                question = f"How many orders contain more than {n} units?"
+                answer = sum(1 for r in rows if r["units"] > n)
+            elif kind == "distinct_products":
+                question = f"How many different products appear in {name}?"
+                answer = len({r["product"] for r in rows})
+            elif kind == "max_units":
+                question = f"What is the largest number of units in a single '{product}' order?"
+                answer = max((r["units"] for r in mine), default=None)
+            elif kind == "best_month":
+                question = (f"In which month were the most units of product '{product}' sold? "
+                            "Answer with the month number.")
+                answer = _unique_best({m: sum(r["units"] for r in mine if r["month"] == m) for m in range(1, 13)})
+            elif kind == "cost_over":  # «cost» — глагол, а не колонка
+                n = rng.choice([300, 500, 800, 1000])
+                question = f"How many orders cost more than {n} in total?"
+                answer = sum(1 for r in rows if r["units"] * r["price"] > n)
+            else:  # total_modifier: между «total» и колонкой стоит название товара
+                question = f"What were the total {product} units sold in the {region} region?"
+                answer = sum(r["units"] for r in mine if r["region"] == region)
+        if answer is not None:
+            break
+    head = f"The file {name} has columns {','.join(rows[0])} ({n_rows} rows). "
+    text = head + question + " Use bash with python3 to compute it. " + WORK_TAIL
+    return Generated("data_analysis", text, str(answer), check, f"novel:{kind}", {name: _csv_text(rows)})
+
+
+def novel_search(rng: random.Random) -> Generated:
+    companies = {c: {"Headquarters": rng.choice(CITIES), "Founded": str(rng.randint(1950, 2015))} for c in COMPANIES}
+    names = rng.sample([f"{f} {l}" for f in FIRST_NAMES for l in LAST_NAMES], rng.randint(24, 30))
+    people = {n: {"Born": str(rng.randint(1950, 2000)), "Employer": rng.choice(COMPANIES)} for n in names}
+    for n in names:
+        people[n]["Mentor"] = rng.choice([m for m in names if m != n])
+    prose = rng.random() < 0.5  # база знаний связным текстом, а не «Поле: значение»
+    kinds = ["employer", "mentored_by", "headquartered", "count_staff", "born_earlier", "mentor_of_mentor",
+             "mentor_employer_founded"] + (["born", "hq_of_employer"] if prose else [])
+    kind = rng.choice(kinds)
+    while True:
+        person, other = rng.sample(names, 2)
+        p, company = people[person], rng.choice(COMPANIES)
+        mentor = people[p["Mentor"]]
+        if kind == "born":
+            question, answer = f"In which year was {person} born?", p["Born"]
+        elif kind == "hq_of_employer":
+            question = f"In which city is the headquarters of {person}'s employer?"
+            answer = companies[p["Employer"]]["Headquarters"]
+        elif kind == "employer":
+            question, answer = f"Which company does {person} work for?", p["Employer"]
+        elif kind == "mentored_by":
+            question, answer = f"Who mentors {person}?", p["Mentor"]
+        elif kind == "headquartered":
+            question = f"Where is the company that employs {person} headquartered?"
+            answer = companies[p["Employer"]]["Headquarters"]
+        elif kind == "count_staff":  # ответа нет в базе буквально — его надо посчитать
+            question = f"How many people in the knowledge base work at {company}?"
+            answer = str(sum(1 for q in people.values() if q["Employer"] == company))
+        elif kind == "born_earlier":
+            if p["Born"] == people[other]["Born"]:
+                continue
+            question = f"Who was born earlier, {person} or {other}?"
+            answer = person if p["Born"] < people[other]["Born"] else other
+        elif kind == "mentor_of_mentor":
+            question, answer = f"Who is the mentor of {person}'s mentor?", mentor["Mentor"]
+        else:
+            question = f"In which year was the employer of {person}'s mentor founded?"
+            answer = companies[mentor["Employer"]]["Founded"]
+        break
+
+    if prose:
+        files = {f"kb/company_{_slug(c)}.md": f"# {c}\n\n{c} was founded in {f['Founded']}. "
+                                              f"Its headquarters are in {f['Headquarters']}.\n"
+                 for c, f in companies.items()}
+        files.update({f"kb/person_{_slug(n)}.md": f"# {n}\n\n{n} was born in {f['Born']}. {n.split()[0]} works at "
+                                                  f"{f['Employer']}, and {n.split()[0]}'s mentor is {f['Mentor']}.\n"
+                      for n, f in people.items()})
+    else:
+        files = {f"kb/company_{_slug(c)}.md": f"# {c}\n\n" + "".join(f"{k}: {v}\n" for k, v in f.items())
+                 for c, f in companies.items()}
+        files.update({f"kb/person_{_slug(n)}.md": f"# {n}\n\n" + "".join(f"{k}: {v}\n" for k, v in f.items())
+                      for n, f in people.items()})
+    text = ("The directory kb/ contains a small knowledge base of markdown files. " + question
+            + " Use the file tools or bash (ls, grep, cat) to find it. " + WORK_TAIL)
+    return Generated("search", text, answer, "exact_str", f"novel:{kind}" + (":prose" if prose else ""), files)
+
+
+STACK_CLASS = ("class Stack:\n    def __init__(self):\n        self.items = []\n\n"
+               "    def push(self, x):\n        self.items.append(x)\n\n"
+               "    def pop(self):\n        return self.items.pop()\n\n"
+               "    def peek(self):\n        return self.items[-1]\n\n"
+               "    def size(self):\n        return len(self.items)\n")
+STACK_BUGS = {"pop": ("return self.items.pop()", "return self.items.pop(0)"),
+              "peek": ("return self.items[-1]", "return self.items[0]"),
+              "size": ("return len(self.items)", "return len(self.items) - 1")}
+COUNTER_CLASS = ("class Counter:\n    def __init__(self, start=0):\n        self.value = start\n\n"
+                 "    def increment(self):\n        self.value += 1\n        return self.value\n\n"
+                 "    def reset(self):\n        self.value = 0\n")
+COUNTER_BUGS = {"increment": ("self.value += 1", "self.value += 2"), "reset": ("self.value = 0\n", "self.value = 1\n")}
+STATEFUL_VISIBLE = {
+    "stack_pop": ["s = m.Stack()", "s.push(1)", "s.push(2)", "s.push(3)", "self.assertEqual(s.pop(), 3)",
+                  "self.assertEqual(s.pop(), 2)"],
+    "stack_peek_size": ["s = m.Stack()", "s.push('a')", "s.push('b')", "self.assertEqual(s.peek(), 'b')",
+                        "self.assertEqual(s.size(), 2)", "s.pop()", "self.assertEqual(s.size(), 1)"],
+    "counter": ["c = m.Counter()", "self.assertEqual(c.increment(), 1)", "self.assertEqual(c.increment(), 2)",
+                "c.reset()", "self.assertEqual(c.increment(), 1)"],
+}
+STATEFUL_HIDDEN = {
+    "stack_more": ["s = m.Stack()", "s.push(10)", "self.assertEqual(s.peek(), 10)", "s.push(20)",
+                   "self.assertEqual(s.pop(), 20)", "self.assertEqual(s.pop(), 10)", "self.assertEqual(s.size(), 0)"],
+    "counter_start": ["c = m.Counter(5)", "self.assertEqual(c.increment(), 6)", "c.reset()",
+                      "self.assertEqual(c.value, 0)"],
+}
+
+
+def _check_call(check: str) -> tuple[str, str, str]:
+    """self.assertEqual(m.f(x), y) → ('assertEqual', 'm.f(x)', 'y'); для assertTrue/False третья часть пустая."""
+    node = ast.parse(check.strip(), mode="eval").body
+    rest = ast.unparse(node.args[1]) if len(node.args) > 1 else ""
+    return node.func.attr, ast.unparse(node.args[0]), rest
+
+
+def _restyle(cases: dict[str, list[str]], style: str, names: list[str]) -> dict[str, list[str]]:
+    """Те же проверки другим стилем: через переменную result или без префикса модуля (from-импорт)."""
+    out = {}
+    for test, checks in cases.items():
+        lines = []
+        for check in checks:
+            method, call, rest = _check_call(check)
+            if style == "from_import":
+                call = re.sub(rf"\bm\.(?=(?:{'|'.join(names)})\()", "", call)
+                lines.append(f"self.{method}({call}{', ' + rest if rest else ''})")
+            else:
+                lines += [f"result = {call}", f"self.{method}(result{', ' + rest if rest else ''})"]
+        out[test] = lines
+    return out
+
+
+def novel_coding(rng: random.Random) -> Generated:
+    style = rng.choice(["vars", "from_import", "stateful"])
+    if style == "stateful":
+        names = rng.sample(list(FUNCTIONS), rng.randint(1, 2))
+        stack_bug, counter_bug = rng.choice(list(STACK_BUGS)), rng.choice([None, *COUNTER_BUGS])
+        correct = "\n\n".join([STACK_CLASS, COUNTER_CLASS, *(FUNCTIONS[n][0] for n in names)])
+        stack = STACK_CLASS.replace(*STACK_BUGS[stack_bug])
+        counter = COUNTER_CLASS.replace(*COUNTER_BUGS[counter_bug]) if counter_bug else COUNTER_CLASS
+        module = "\n\n".join([stack, counter, *(FUNCTIONS[n][0] for n in names)])
+        visible = {**STATEFUL_VISIBLE, **{n: list(FUNCTIONS[n][2]) for n in names}}
+        hidden = {**STATEFUL_VISIBLE, **STATEFUL_HIDDEN, **{n: FUNCTIONS[n][2] + FUNCTIONS[n][3] for n in names}}
+        header = "import mylib as m"
+    else:
+        names = rng.sample(list(FUNCTIONS), rng.randint(3, 6))
+        buggy = set(rng.sample(names, rng.randint(1, min(3, len(names)))))
+        correct = "\n\n".join(FUNCTIONS[n][0] for n in names)
+        module = "\n\n".join(rng.choice(FUNCTIONS[n][1]) if n in buggy else FUNCTIONS[n][0] for n in names)
+        visible = _restyle({n: list(FUNCTIONS[n][2]) for n in names}, style, names)
+        hidden = _restyle({n: FUNCTIONS[n][2] + FUNCTIONS[n][3] for n in names}, style, names)
+        header = f"from mylib import {', '.join(names)}" if style == "from_import" else "import mylib as m"
+    visible_tests = _test_file(visible).replace("import mylib as m", header)
+    hidden_tests = _test_file(hidden).replace("import mylib as m", header)
+    assert _tests_pass(correct, visible_tests) and _tests_pass(correct, hidden_tests), (style, names)
+    assert not _tests_pass(module, visible_tests), (style, names)
+    return Generated("coding", CODING_INSTRUCTION, "tests_pass", "unittest", f"novel:{style}",
+                     {"mylib.py": module, "test_mylib.py": visible_tests}, {"test_hidden.py": hidden_tests})
+
+
+NOVEL = {"math": novel_math, "data_analysis": novel_data_analysis, "search": novel_search, "coding": novel_coding}
+
+
 # ---------------------------------------------------------------- сборка набора
 
 GENERATORS = {"math": gen_math, "data_analysis": gen_data_analysis, "search": gen_search, "coding": gen_coding}
@@ -428,6 +728,8 @@ def main() -> int:
     parser.add_argument("--types", nargs="*", default=list(GENERATORS), choices=list(GENERATORS))
     parser.add_argument("--infeasible-share", type=float, default=0.2, help="доля невыполнимых (в финале 15–25%%)")
     parser.add_argument("--paraphrase-share", type=float, default=0.3, help="доля перефразировок среди выполнимых")
+    parser.add_argument("--novel-share", type=float, default=0.0,
+                        help="доля задач нового вида среди выполнимых (variant novel:*)")
     parser.add_argument("--infeasible-kinds", nargs="*", default=None,
                         help="только эти виды невыполнимых задач (по умолчанию все из INFEASIBLE_KINDS)")
     parser.add_argument("--force", action="store_true", help="перезаписать существующую папку")
@@ -452,7 +754,11 @@ def main() -> int:
     stats: dict[str, int] = {}
     for index, (task_type, infeasible) in enumerate(plan):
         kind = rng.choice(kinds[task_type]) if infeasible else None
-        gen = GENERATORS[task_type](rng, kind, paraphrase=rng.random() < args.paraphrase_share)
+        # Лишний вызов rng только при --novel-share > 0: прежние сиды дают прежние наборы.
+        if not infeasible and args.novel_share > 0 and rng.random() < args.novel_share:
+            gen = NOVEL[task_type](rng)
+        else:
+            gen = GENERATORS[task_type](rng, kind, paraphrase=rng.random() < args.paraphrase_share)
         write_task(args.out, f"{task_type}_{index:04d}", gen, rng.randint(1, 5), args.seed)
         key = f"{task_type}/{gen.variant}"
         stats[key] = stats.get(key, 0) + 1

@@ -45,9 +45,10 @@ class Usage:
 class TokenMeter:
     """Общий счётчик на весь прогон. Работает в одном event loop, блокировки не нужны.
 
-    После исчерпания бюджета прокси перестаёт отвечать и запуск принудительно завершают, поэтому
-    пересекать бюджет нельзя ни на один вызов. Перед каждым вызовом резервируем его худшую стоимость
-    (reserve), после вызова снимаем резерв (release) и записываем фактический расход (record).
+    Остатка прокси не сообщает: расход считают организаторы и при исчерпании бюджета останавливают прогон
+    (встреча 09.11), поэтому пересекать бюджет нельзя ни на один вызов. Перед каждым вызовом резервируем его
+    худшую стоимость (reserve), после вызова снимаем резерв (release) и записываем фактический расход (record),
+    а для вызова, оборвавшегося ошибкой, — оценку сверху (charge).
     """
 
     def __init__(self, budget: float | None = None, task_cap: float | None = None):
@@ -67,6 +68,13 @@ class TokenMeter:
             output_tokens=int(getattr(usage_metadata, "output_tokens", 0) or 0),
             reasoning_tokens=int(getattr(usage_metadata, "reasoning_tokens", 0) or 0),
         )
+        self.total.add(usage)
+        self._per_task.setdefault(task_id, Usage()).add(usage)
+
+    def charge(self, task_id: str, input_tokens: float, output_tokens: float = 0) -> None:
+        """Вызов, оборвавшийся ошибкой, — без usage. Ушедший запрос прокси организаторов всё равно считает
+        (встреча 09.11), поэтому списываем оценку сверху."""
+        usage = Usage(calls=1, input_tokens=round(input_tokens), output_tokens=round(output_tokens))
         self.total.add(usage)
         self._per_task.setdefault(task_id, Usage()).add(usage)
 

@@ -26,6 +26,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 from harness import estimator  # noqa: E402
+from harness.config import DEFAULT_MODEL, MATH_MODEL  # noqa: E402
 from harness.tasks import load_tasks  # noqa: E402
 
 ROUTE_FEATURES = {"coding": ["module_chars", "n_asserts", "n_functions"]}
@@ -87,6 +88,11 @@ def quantile(values: list[float], q: float) -> float:
     return ordered[min(len(ordered) - 1, int(q * len(ordered)))]
 
 
+def current_model(task_type: str) -> str:
+    """Модель, которую харнесс выбирает сейчас (как solver.choose_model при настройках по умолчанию)."""
+    return MATH_MODEL if task_type == "math" else DEFAULT_MODEL
+
+
 def consistent(solver: str, route: str, cost: float) -> bool:
     """Запись показательна, только если харнесс и сейчас решал бы задачу тем же путём."""
     if solver == "fastpath":
@@ -96,7 +102,8 @@ def consistent(solver: str, route: str, cost: float) -> bool:
         return route == "coding" or (route == "coding:contradiction" and cost == 0)
     if solver == "oneshot":
         # Невыполнимость, видная до вызова LLM (precheck), ничего не стоит; старые записи с расходом устарели.
-        return route.startswith("oneshot:") or (route == "precheck" and cost == 0)
+        # И наоборот: запись с нулевым расходом — от прежнего правила precheck, а сейчас задача идёт к модели.
+        return (route.startswith("oneshot:") and cost > 0) or (route == "precheck" and cost == 0)
     return solver == "llm" and route.startswith("agent:")
 
 
@@ -129,6 +136,8 @@ def load_records(run_dirs: list[Path]) -> list[dict]:
             route = estimator.detect_route(task)
             if not consistent(rec["solver"], route, float(rec["cost"])):
                 continue  # маршрут изменился с тех пор (например, задачу теперь берёт быстрый путь)
+            if float(rec["cost"]) > 0 and rec.get("model") and rec["model"] != current_model(task.task_type):
+                continue  # решала другая модель (math теперь решает модель с рассуждениями)
             records.append({"run": run.name, "task_id": task.task_id, "task_type": task.task_type,
                             "variant": task.raw.get("generator", {}).get("variant"), "route": route,
                             "features": estimator.extract_features(task), "cost": float(rec["cost"])})

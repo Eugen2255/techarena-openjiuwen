@@ -19,7 +19,7 @@ jobs:
           python-version: "3.12"
       - name: Unit-тесты
         run: python -m unittest discover -s tests -v
-      - name: Быстрый путь на примерах и сгенерированных задачах (ошибок должно быть 0)
+      - name: Решения без LLM на примерах, сгенерированных задачах и задачах нового вида (ошибок должно быть 0)
         run: |
           python scripts/check_fastpath.py tasks_examples
           python scripts/check_fastpath.py tasks_custom
@@ -27,6 +27,9 @@ jobs:
             python scripts/generate_tasks.py --count 200 --seed "$seed" --out "/tmp/gen_$seed" --force
             python scripts/check_fastpath.py "/tmp/gen_$seed"
           done
+          python scripts/generate_tasks.py --count 200 --seed 103 --novel-share 1.0 --infeasible-share 0 \
+            --out /tmp/gen_novel --force
+          python scripts/check_fastpath.py /tmp/gen_novel
 
   docker:
     name: Чистая сборка и запуск с флагами регламента

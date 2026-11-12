@@ -1,64 +1,66 @@
 {
-  "fitted_at": "2026-11-12 23:11",
+  "fitted_at": "2026-11-13 02:39",
   "fitted_on": [
-    "20261112_230647",
-    "20261112_230759",
-    "20261112_230958",
-    "20261112_230553"
+    "20261113_022712",
+    "20261113_023132",
+    "20261113_023523",
+    "20261113_023728"
   ],
-  "n_records": 410,
+  "n_records": 450,
   "routes": {
     "coding": {
-      "intercept": 96.5152,
-      "coef": {},
-      "upper_factor": 1.354,
-      "n": 66,
-      "mean_cost": 96.5,
-      "loo_mae": 23.5,
-      "loo_mape": 0.284,
-      "loo_under": 0.5,
-      "loo_upper_under": 0.091
+      "intercept": 79.1008,
+      "coef": {
+        "module_chars": 0.237841,
+        "n_asserts": -4.777108,
+        "n_functions": -6.35713
+      },
+      "upper_factor": 1.388,
+      "n": 86,
+      "mean_cost": 119.0,
+      "loo_mae": 31.3,
+      "loo_mape": 0.295,
+      "loo_under": 0.465,
+      "loo_upper_under": 0.093
     },
     "oneshot:data_analysis": {
-      "intercept": -14.5976,
+      "intercept": -103.3087,
       "coef": {
-        "instruction_chars": 0.331149,
-        "n_files": 0.0,
-        "workspace_kb": -0.515701
+        "instruction_chars": 0.610623
       },
-      "upper_factor": 1.032,
-      "n": 24,
-      "mean_cost": 112.2,
-      "loo_mae": 2.8,
-      "loo_mape": 0.025,
-      "loo_under": 0.542,
-      "loo_upper_under": 0.083
+      "upper_factor": 1.411,
+      "n": 100,
+      "mean_cost": 122.4,
+      "loo_mae": 21.9,
+      "loo_mape": 0.215,
+      "loo_under": 0.3,
+      "loo_upper_under": 0.08
     },
     "oneshot:math": {
-      "intercept": -32.3755,
+      "intercept": -53.7372,
       "coef": {
-        "instruction_chars": 0.182497
+        "instruction_chars": 0.6597
       },
-      "upper_factor": 1.65,
-      "n": 19,
-      "mean_cost": 54.0,
-      "loo_mae": 23.5,
-      "loo_mape": 0.635,
-      "loo_under": 0.579,
-      "loo_upper_under": 0.053
+      "upper_factor": 1.34,
+      "n": 70,
+      "mean_cost": 260.9,
+      "loo_mae": 47.0,
+      "loo_mape": 0.192,
+      "loo_under": 0.386,
+      "loo_upper_under": 0.086
     },
     "oneshot:search": {
-      "intercept": 6.5851,
+      "intercept": 94.3413,
       "coef": {
-        "n_files": 2.635027
+        "workspace_kb": 20.312555
       },
-      "upper_factor": 1.02,
-      "n": 9,
-      "mean_cost": 104.7,
-      "loo_mae": 1.4,
-      "loo_mape": 0.013,
-      "loo_under": 0.556,
-      "loo_upper_under": 0.0
+      "upper_factor": 1.176,
+      "n": 48,
+      "mean_cost": 159.1,
+      "loo_mae": 22.0,
+      "loo_mape": 0.122,
+      "loo_under": 0.25,
+      "loo_upper_under": 0.104
     }
   }
 }

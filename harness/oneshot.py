@@ -6,8 +6,13 @@
   search — строкой ANSWER по базе знаний, которую харнесс кладёт в запрос в сжатом виде;
   coding — своя схема в harness/coding.py.
 Невыполнимость: модель отвечает INFEASIBLE; кроме того, харнесс сам видит обращение программы к колонке,
-которой нет в файле (KeyError), и деление на 0 в math.
+которой нет в файле (KeyError), и деление на 0 в math — если модель не исправила программу и после подсказки.
 Не вышло (нет кода, программа дважды падает, ответа нет в базе) → None, задачу решает агент.
+
+Правил невыполнимости по тексту вопроса до вызова LLM здесь нет. Прежнее правило для data_analysis
+(слова «total discount», «profit», «were returned» без такой колонки) ошибалось на выполнимых задачах нового вида:
+«total revenue», «orders cost more than 500», колонка status. Ошибка стоит баллов за задачу, а верное
+срабатывание экономит один вызов: баллов за распознанную невыполнимую задачу нет (встреча 09.11).
 """
 from __future__ import annotations
 
@@ -31,22 +36,26 @@ MAX_PROGRAM_ATTEMPTS = 2
 MAX_KB_CHARS = 12000  # больше — базу целиком в запрос не кладём, решает агент
 PREVIEW_ROWS = 3
 
-MATH_PROMPT = """Translate the word problem into a short Python 3 program that prints only the final integer answer.
-Follow the wording literally ("rounded down" is //, "doubled" is *2). Never invent missing numbers.
+MATH_PROMPT = """Translate the word problem into a short Python 3 program that prints only the final answer{kind}.
+Follow the wording literally ("rounded down" is //, "doubled" is *2) and track the quantity step by step:
+when a part is given away, sold, used up or moved, subtract that part (rounded as the problem says);
+when the problem says which part is kept, keep that part. Never invent missing numbers.
 If the problem cannot be solved exactly with the given data (an unknown quantity, an undefined operation),
 reply with the single word INFEASIBLE. Otherwise reply with one ```python block only."""
 
 DATA_PROMPT = """Answer the question about the data file by writing a short Python 3 program (standard library only)
 that reads the file from the current directory and prints only the final answer.
-Compute exactly what the question asks. If it asks for a quantity that is neither a column of the file nor defined
-in the question itself (e.g. "profit", "tax" or "rating" when there is no such column), or needs a file or value
-the data does not have, reply with the single word INFEASIBLE. Never substitute a different quantity and never
-print 0 for missing data. Read columns as row['name'], never .get() with a default.
-Otherwise reply with one ```python block only."""
+Compute exactly what the question asks. Quantities derived from the columns are fine (revenue or the cost of
+an order is units times price), and so are values given in the question itself (a cost per unit, a tax rate).
+If the question needs a column, file or value that the data does not have and that cannot be derived from it
+(e.g. "profit" without costs, "rating" when there is no such column), reply with the single word INFEASIBLE.
+Never substitute a different quantity and never print 0 for missing data. Read columns as row['name'],
+never .get() with a default. Otherwise reply with one ```python block only."""
 
 SEARCH_PROMPT = """Answer the question using only the knowledge base below. Follow references between entries
-(an employer or a mentor has its own entry).
-Reply with one line: ANSWER: <value exactly as written in the knowledge base>.
+(an employer or a mentor has its own entry). If the question needs counting or comparing, first write one short
+line with the values you count or compare.
+End with one line: ANSWER: <the answer; copy names and values exactly as written in the knowledge base>.
 If the knowledge base does not contain enough information (a missing entry or field, or an ambiguous answer),
 reply: ANSWER: INFEASIBLE"""
 
@@ -54,40 +63,6 @@ _FENCE_RE = re.compile(r"```(?:python|py)?\s*\n(.*?)```", re.DOTALL)
 _ANSWER_RE = re.compile(r"ANSWER:\s*(.+)", re.IGNORECASE)
 _KEY_ERROR_RE = re.compile(r"KeyError: ['\"](?P<key>[^'\"]+)['\"]")
 _KB_DIR_RE = re.compile(r"The directory (?P<dir>[\w./-]+?)/? contains")
-# «total discount», «average rating» — агрегат по величине; слова-счётчики («total number of units») не считаются.
-_AGGREGATE_RE = re.compile(r"\b(?:total|sum of(?: the)?|average|mean)\s+(?P<word>[a-z]+)", re.IGNORECASE)
-_COUNT_WORDS = {"number", "amount", "count", "quantity", "sales", "orders", "rows", "records", "items",
-                "transactions", "of"}
-# События и понятия, которых нет в данных о продажах, если нет такой колонки: модель подставляет вместо них
-# что-то похожее (возвраты — проданные единицы, прибыль — выручку).
-_EVENT_RE = re.compile(r"\bwere\s+(?P<word>returned|refunded|cancell?ed|damaged|lost|exchanged|discounted)\b",
-                       re.IGNORECASE)
-_CONCEPT_RE = re.compile(r"\b(?P<word>profit|margin|cost|tax|discount|customer|rating|weight|shipping|refund"
-                         r"|salary|age|email)s?\b", re.IGNORECASE)
-
-
-def _has_column(word: str, names: list[str]) -> bool:
-    stem = word.lower().rstrip("s")
-    if stem.endswith("ed"):
-        stem = stem[:-2]
-    return any(n.startswith(stem) or stem.startswith(n) for n in names if n)
-
-
-def _defined_in_question(word: str, question: str) -> bool:
-    """«total revenue (units times price)», «profit is price minus 5» — величина определена в самом вопросе."""
-    return re.search(rf"\b{word}s?\b\s*(?:\(|is\b|=|means\b|defined as\b)", question, re.IGNORECASE) is not None
-
-
-def missing_quantity(question: str, columns: list[str]) -> str | None:
-    """Величина или событие из вопроса, которых нет среди колонок и которые не определены в самом вопросе."""
-    names = [c.lower() for c in columns]
-    for regex in (_AGGREGATE_RE, _EVENT_RE, _CONCEPT_RE):
-        for match in regex.finditer(question):
-            word = match["word"].lower()
-            if word in _COUNT_WORDS or _has_column(word, names) or _defined_in_question(word, question):
-                continue
-            return word
-    return None
 
 
 def data_files(task: Task) -> list[Path]:
@@ -134,12 +109,11 @@ def _csv_header(path: Path) -> tuple[list[str], list[str]]:
 
 
 def precheck_infeasible(task: Task) -> str | None:
-    """Невыполнимость, видная до вызова LLM (её проверяют и решатель, и оценщик стоимости)."""
-    if task.task_type == "data_analysis" and supports_oneshot(task):
-        header, _ = _csv_header(data_files(task)[0])
-        missing = missing_quantity(question_text(task.instruction), header)
-        if missing:
-            return f"question asks for {missing!r}, no such column"
+    """Невыполнимость, видная до вызова LLM (её проверяют и решатель, и оценщик стоимости).
+
+    Сейчас правил нет (см. докстринг модуля): по тексту вопроса нового вида невыполнимость без модели
+    не определить надёжно. Невыполнимость по разобранному условию распознаёт быстрый путь.
+    """
     return None
 
 
@@ -178,7 +152,7 @@ async def _solve_with_program(task: Task, settings: Settings, model) -> Outcome 
     else:
         workdir = Path(tempfile.gettempdir()) / "harness_work" / task.task_id
         workdir.mkdir(parents=True, exist_ok=True)
-        system = MATH_PROMPT
+        system = MATH_PROMPT.format(kind=" (an integer)" if task.check == "exact_int" else "")
 
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     for attempt in range(1, MAX_PROGRAM_ATTEMPTS + 1):
@@ -198,14 +172,22 @@ async def _solve_with_program(task: Task, settings: Settings, model) -> Outcome 
                     return Outcome(answer, local_ok=True, note=f"oneshot: program, {attempt} call(s)", final_text=reply)
                 feedback = f"The program printed {answer!r}, but only the final answer is needed (an integer)."
             else:
-                # Невыполнимость, которую видно по запуску, а не по словам модели.
+                # Невыполнимость, которую видно по запуску, а не по словам модели. С первой попытки не верим:
+                # модель могла ошибиться в имени колонки или в формуле — даём исправить.
                 missing = _KEY_ERROR_RE.search(output)
-                if task.task_type == "data_analysis" and missing and missing["key"] not in header:
-                    return Outcome(None, infeasible=True, note=f"oneshot: no column {missing['key']!r}",
-                                   final_text=reply)
-                if task.task_type == "math" and "ZeroDivisionError" in output:
-                    return Outcome(None, infeasible=True, note="oneshot: division by zero", final_text=reply)
-                feedback = f"The program failed:\n```\n{output[-1500:]}\n```\nFix it. Use the same reply format."
+                no_column = task.task_type == "data_analysis" and missing and missing["key"] not in header
+                zero_division = task.task_type == "math" and "ZeroDivisionError" in output
+                if (no_column or zero_division) and attempt == MAX_PROGRAM_ATTEMPTS:
+                    note = f"oneshot: no column {missing['key']!r}" if no_column else "oneshot: division by zero"
+                    return Outcome(None, infeasible=True, note=note, final_text=reply)
+                if no_column:
+                    feedback = (f"The file has no column {missing['key']!r}; its only columns are: {', '.join(header)}. "
+                                "Fix the program, or reply INFEASIBLE if the question needs data the file does not have.")
+                elif zero_division:
+                    feedback = ("The program divided by zero. If the problem itself divides by zero, reply INFEASIBLE; "
+                                "otherwise fix the program.")
+                else:
+                    feedback = f"The program failed:\n```\n{output[-1500:]}\n```\nFix it. Use the same reply format."
         log.info("[%s] oneshot attempt %d failed: %s | reply: %r", task.task_id, attempt,
                  feedback.splitlines()[0], reply[:200])
         messages += [{"role": "assistant", "content": reply}, {"role": "user", "content": feedback}]
