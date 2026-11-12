@@ -55,26 +55,38 @@ _ANSWER_RE = re.compile(r"ANSWER:\s*(.+)", re.IGNORECASE)
 _KEY_ERROR_RE = re.compile(r"KeyError: ['\"](?P<key>[^'\"]+)['\"]")
 _KB_DIR_RE = re.compile(r"The directory (?P<dir>[\w./-]+?)/? contains")
 # «total discount», «average rating» — агрегат по величине; слова-счётчики («total number of units») не считаются.
-_AGGREGATE_RE = re.compile(r"\b(?:total|sum of(?: the)?|average|mean)\s+(?P<word>[a-z]+)(?P<rest>[^?]*)", re.IGNORECASE)
+_AGGREGATE_RE = re.compile(r"\b(?:total|sum of(?: the)?|average|mean)\s+(?P<word>[a-z]+)", re.IGNORECASE)
 _COUNT_WORDS = {"number", "amount", "count", "quantity", "sales", "orders", "rows", "records", "items",
                 "transactions", "of"}
+# События и понятия, которых нет в данных о продажах, если нет такой колонки: модель подставляет вместо них
+# что-то похожее (возвраты — проданные единицы, прибыль — выручку).
+_EVENT_RE = re.compile(r"\bwere\s+(?P<word>returned|refunded|cancell?ed|damaged|lost|exchanged|discounted)\b",
+                       re.IGNORECASE)
+_CONCEPT_RE = re.compile(r"\b(?P<word>profit|margin|cost|tax|discount|customer|rating|weight|shipping|refund"
+                         r"|salary|age|email)s?\b", re.IGNORECASE)
+
+
+def _has_column(word: str, names: list[str]) -> bool:
+    stem = word.lower().rstrip("s")
+    if stem.endswith("ed"):
+        stem = stem[:-2]
+    return any(n.startswith(stem) or stem.startswith(n) for n in names if n)
+
+
+def _defined_in_question(word: str, question: str) -> bool:
+    """«total revenue (units times price)», «profit is price minus 5» — величина определена в самом вопросе."""
+    return re.search(rf"\b{word}s?\b\s*(?:\(|is\b|=|means\b|defined as\b)", question, re.IGNORECASE) is not None
 
 
 def missing_quantity(question: str, columns: list[str]) -> str | None:
-    """Величина, которую вопрос агрегирует, но которой нет среди колонок и нет определения в самом вопросе.
-
-    Модель в таких случаях склонна подменять величину другой (например, «скидку» — выручкой).
-    """
+    """Величина или событие из вопроса, которых нет среди колонок и которые не определены в самом вопросе."""
     names = [c.lower() for c in columns]
-    for match in _AGGREGATE_RE.finditer(question):
-        word = match["word"].lower()
-        stem = word.rstrip("s")
-        if word in _COUNT_WORDS or any(n.startswith(stem) or stem.startswith(n) for n in names if n):
-            continue
-        if match["rest"].lstrip().startswith("(") or re.search(rf"\b{word}\b\s*(?:is|=|means|defined as)\b",
-                                                                question, re.IGNORECASE):
-            continue  # величина определена в вопросе: «total revenue (units times price)»
-        return word
+    for regex in (_AGGREGATE_RE, _EVENT_RE, _CONCEPT_RE):
+        for match in regex.finditer(question):
+            word = match["word"].lower()
+            if word in _COUNT_WORDS or _has_column(word, names) or _defined_in_question(word, question):
+                continue
+            return word
     return None
 
 
@@ -116,6 +128,21 @@ def supports_oneshot(task: Task) -> bool:
     return False
 
 
+def _csv_header(path: Path) -> tuple[list[str], list[str]]:
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    return ([c.strip() for c in lines[0].split(",")] if lines else []), lines
+
+
+def precheck_infeasible(task: Task) -> str | None:
+    """Невыполнимость, видная до вызова LLM (её проверяют и решатель, и оценщик стоимости)."""
+    if task.task_type == "data_analysis" and supports_oneshot(task):
+        header, _ = _csv_header(data_files(task)[0])
+        missing = missing_quantity(question_text(task.instruction), header)
+        if missing:
+            return f"question asks for {missing!r}, no such column"
+    return None
+
+
 def extract_code(reply: str) -> str | None:
     code = "\n\n".join(_FENCE_RE.findall(reply)).strip()
     return code or None
@@ -143,11 +170,7 @@ async def _solve_with_program(task: Task, settings: Settings, model) -> Outcome 
     user = question_text(task.instruction)
     if task.task_type == "data_analysis":
         workdir, data = task.workspace, data_files(task)[0]
-        lines = data.read_text(encoding="utf-8", errors="replace").splitlines()
-        header = [c.strip() for c in lines[0].split(",")] if lines else []
-        missing = missing_quantity(user, header)
-        if missing:
-            return Outcome(None, infeasible=True, note=f"oneshot: question asks for {missing!r}, no such column")
+        header, lines = _csv_header(data)
         preview = "\n".join(lines[:PREVIEW_ROWS + 1])
         user += (f"\n\nFile {data.relative_to(workdir).as_posix()}: {max(len(lines) - 1, 0)} data rows; "
                  f"its only columns are: {', '.join(header)}. First lines:\n{preview}")
@@ -211,6 +234,9 @@ async def solve_oneshot(task: Task, settings: Settings, meter: TokenMeter, model
         return await solve_coding(task, settings, meter, model_name)
     if not supports_oneshot(task):
         return None
+    reason = precheck_infeasible(task)
+    if reason:
+        return Outcome(None, infeasible=True, note=f"oneshot: {reason}")
     from harness.llm import make_model  # openJiuwen нужен только здесь; помощники выше тестируются без него
 
     model = make_model(settings, meter, task.task_id, model_name)

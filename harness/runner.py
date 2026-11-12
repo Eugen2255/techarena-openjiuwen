@@ -5,12 +5,14 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import sys
 import time
+import uuid
 from collections import deque
 from pathlib import Path
 
-from harness import estimator, fastpath
+from harness import STARTED_AT, estimator, fastpath
 from harness.config import Settings, parse_settings
 from harness.estimator import Estimate
 from harness.meter import TokenMeter
@@ -54,6 +56,20 @@ class Run:
         self.writer = AnswerWriter(settings.out_file)
         self.trajectories = TrajectoryLog(settings.log_dir)
         self.stats = {"answered": 0, "fastpath": 0, "infeasible": 0, "skipped_budget": 0, "llm_errors_in_row": 0}
+        # Часовой лимит считаем от старта процесса, а не от начала этапа с LLM.
+        self.deadline = STARTED_AT + settings.time_limit_s
+        self.stop = asyncio.Event()
+        self.stop_reason: str | None = None
+
+    def time_left(self) -> float:
+        return self.deadline - time.monotonic()
+
+    def request_stop(self, reason: str) -> None:
+        """Новые задачи больше не начинаем; начатые доводим до конца — их ответы будут записаны."""
+        if self.stop_reason is None:
+            self.stop_reason = reason
+            log.warning("stopping the run (%s): no new tasks, finishing the ones in progress", reason)
+        self.stop.set()
 
     def finish(self, task: Task, result: SolveResult, estimate: Estimate | None = None) -> None:
         if result.answer is not None:
@@ -73,7 +89,11 @@ class Run:
     def run_fastpath(self, tasks: list[Task]) -> list[Task]:
         """Решает без LLM всё, что умеет. Возвращает задачи, оставшиеся агенту."""
         rest = []
-        for task in tasks:
+        for index, task in enumerate(tasks):
+            if self.time_left() < 5:
+                self.request_stop("time limit")
+                rest.extend(tasks[index:])
+                break
             started = time.monotonic()
             fast = fastpath.try_solve(task, workdir_for(task))
             if fast is None:
@@ -93,15 +113,15 @@ class Run:
         log.info("estimated cost of the remaining %d tasks: %.0f tokens (upper %.0f)", len(tasks),
                  sum(e.cost for e in estimates.values()), sum(e.upper for e in estimates.values()))
         queue = deque(plan(tasks, estimates))
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + settings.time_limit_s
-        stop = asyncio.Event()
 
         async def worker() -> None:
-            while queue and not stop.is_set():
-                left = deadline - loop.time()
-                if left < 5 or meter.exhausted():
-                    stop.set()
+            while queue and not self.stop.is_set():
+                left = self.time_left()
+                if left < 5:
+                    self.request_stop("time limit")
+                    break
+                if meter.exhausted():
+                    self.request_stop("token budget")
                     break
                 task = queue.popleft()
                 estimate = estimates[task.task_id]
@@ -123,8 +143,7 @@ class Run:
                 if result.error and result.usage.calls == 0:
                     self.stats["llm_errors_in_row"] += 1
                     if self.stats["llm_errors_in_row"] >= MAX_LLM_ERRORS_IN_ROW:
-                        log.error("LLM proxy stopped answering, stopping the run")
-                        stop.set()
+                        self.request_stop("LLM proxy stopped answering")
                 else:
                     self.stats["llm_errors_in_row"] = 0
 
@@ -132,13 +151,38 @@ class Run:
         return len(queue)
 
 
+def check_writable(tasks_dir: Path) -> bool:
+    """Ответы пишутся рядом с task.json. С --cap-drop ALL root в контейнере пишет только туда, где это
+    разрешают биты доступа, — проверяем заранее, чтобы не терять ответы молча."""
+    task_dir = next((p for p in sorted(tasks_dir.iterdir()) if (p / "task.json").is_file()), None)
+    if task_dir is None:
+        return True
+    probe = task_dir / f".write_probe_{uuid.uuid4().hex[:8]}"
+    try:
+        probe.write_text("", encoding="utf-8")
+        probe.unlink()
+        return True
+    except OSError as exc:
+        log.error("CANNOT WRITE answers into %s (uid %s): %s — answer.txt files will be lost",
+                  task_dir, os.getuid() if hasattr(os, "getuid") else "?", exc)
+        return False
+
+
 async def run(settings: Settings) -> dict:
     tasks = load_tasks(settings.tasks_dir)
-    log.info("loaded %d tasks from %s, budget %.0f tokens", len(tasks), settings.tasks_dir, settings.token_budget)
+    log.info("loaded %d tasks from %s, budget %.0f tokens, %.0f s left", len(tasks), settings.tasks_dir,
+             settings.token_budget, STARTED_AT + settings.time_limit_s - time.monotonic())
+    writable = check_writable(settings.tasks_dir)
     state = Run(settings)
+    # timeout организаторов шлёт SIGTERM через час (и SIGKILL ещё через 1000 с). Харнесс — PID 1 в контейнере,
+    # и без обработчика сигнал был бы проигнорирован; с ним доводим начатые задачи и выходим.
+    try:
+        asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, state.request_stop, "SIGTERM")
+    except (NotImplementedError, RuntimeError):  # Windows: сигналы через asyncio не поддерживаются
+        pass
     rest = state.run_fastpath(tasks)
     log.info("fastpath solved %d tasks, %d left for the agent", len(tasks) - len(rest), len(rest))
-    not_started = await state.run_llm(rest)
+    not_started = await state.run_llm(rest) if not state.stop.is_set() else len(rest)
     stats = state.stats
     return {
         "tasks": len(tasks),
@@ -147,6 +191,9 @@ async def run(settings: Settings) -> dict:
         "infeasible": stats["infeasible"],
         "skipped_budget": stats["skipped_budget"],
         "not_started": not_started,
+        "stopped": state.stop_reason,
+        "writable": writable,
+        "seconds": round(time.monotonic() - STARTED_AT, 1),
         "budget": settings.token_budget,
         "usage": state.meter.total.as_dict(),
         "trajectories": str(state.trajectories.path) if state.trajectories.path else None,

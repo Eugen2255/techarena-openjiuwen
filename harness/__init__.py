@@ -1,6 +1,10 @@
 """Харнесс кодового агента на openJiuwen для TechArena 2026."""
 import os
 import tempfile
+import time
+
+# Отметка старта процесса — от неё считается часовой лимит прогона (до тяжёлых импортов openJiuwen).
+STARTED_AT = time.monotonic()
 
 try:
     from openjiuwen.core.common.logging.default.constant import DEFAULT_INNER_LOG_CONFIG

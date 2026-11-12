@@ -7,8 +7,10 @@
   How many boxes does it have at the end? Compute it with the bash tool ...
 
 Каждое предложение условия должно целиком совпасть с одним из шаблонов ниже, иначе — None (решит агент).
-Если вместо числа стоит неопределённое количество («an unknown number of», «some»…) или запас делят на 0 складов,
-а всё остальное разобрано, задача невыполнима: точно посчитать нельзя. Запас, ушедший в минус, отдаём агенту.
+Задача невыполнима (точно посчитать нельзя), если всё условие разобрано, но где-то вместо числа неопределённое
+количество («an unknown number of», «some»…), запас делят на 0 складов, или операции не хватает числа: темп без
+длительности («ships 40 boxes per day»), деление без числа складов («split equally among its sister warehouses»).
+Модель в таких случаях молча додумывает (1 день, 2 склада). Запас, ушедший в минус, отдаём агенту.
 """
 from __future__ import annotations
 
@@ -60,6 +62,21 @@ def _operations(unit: str) -> list[tuple[re.Pattern, Callable[[re.Match], Step]]
     return [(re.compile(p, re.IGNORECASE), make) for p, make in patterns]
 
 
+def _incomplete_operations(unit: str) -> list[tuple[re.Pattern, re.Pattern]]:
+    """Операции, которым не хватает числа: (шаблон операции, шаблон предложения, которое могло бы это число дать).
+
+    Если такое предложение среди незнакомых есть, невыполнимость не объявляем: может, число там.
+    """
+    u = re.escape(unit)
+    return [(re.compile(op, re.IGNORECASE), re.compile(supplier, re.IGNORECASE)) for op, supplier in (
+        (rf"it (?:ships|sells|loses|receives|gets|buys) (?:{_QTY}) {u} (?:per|every|each|a) day",
+         r"\b(?:days?|weeks?|months?|years?|fortnight)\b"),
+        (r"the stock is split equally (?:among|between|across) (?:all |its |the )?(?:sister |other )?\w+"
+         r" and it keeps one share(?: \(rounded (?:down|up)\))?",
+         r"\b(?:\d+|two|three|four|five|six|seven|eight|nine|ten)\b.*\b(?:warehouses|parts|shares|stores|sisters)\b"),
+    )]
+
+
 def _sentences(text: str) -> list[str]:
     return [s.strip().rstrip(".").strip() for s in re.split(r"(?<=\.)\s+", text.strip()) if s.strip()]
 
@@ -84,9 +101,12 @@ def warehouse_stock(task: Task, workdir: Path) -> FastAnswer | None:
         return None
 
     operations = _operations(start["unit"])
+    incomplete_ops = _incomplete_operations(start["unit"])
     steps: list[Step] = []
     vague = _is_vague(start)
     zero_split = False
+    suppliers: list[re.Pattern] = []  # что должно найтись в незнакомых предложениях, чтобы число всё же было
+    unknown: list[str] = []
     for sentence in sentences[1:]:
         body = _CONNECTOR_RE.sub("", sentence)
         for pattern, make in operations:
@@ -100,7 +120,16 @@ def warehouse_stock(task: Task, workdir: Path) -> FastAnswer | None:
                     steps.append(make(match))
                 break
         else:
-            return None  # незнакомая операция
+            gap = next((supplier for op, supplier in incomplete_ops if op.fullmatch(body)), None)
+            if gap is not None:
+                suppliers.append(gap)
+            else:
+                unknown.append(body)
+    # Операции не хватает числа, и ни одно незнакомое предложение не может его дать — посчитать нельзя.
+    if suppliers and not any(s.search(text) for s in suppliers for text in unknown):
+        return FastAnswer(None, infeasible=True, note="warehouse_stock: operation lacks a number")
+    if unknown:
+        return None  # незнакомые операции — решит модель
     if vague:
         return FastAnswer(None, infeasible=True, note="warehouse_stock: unknown quantity")
     if zero_split:

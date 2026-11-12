@@ -95,7 +95,8 @@ def consistent(solver: str, route: str, cost: float) -> bool:
         # Противоречивые тесты теперь отсеиваются без LLM; старые записи с расходом устарели.
         return route == "coding" or (route == "coding:contradiction" and cost == 0)
     if solver == "oneshot":
-        return route.startswith("oneshot:")
+        # Невыполнимость, видная до вызова LLM (precheck), ничего не стоит; старые записи с расходом устарели.
+        return route.startswith("oneshot:") or (route == "precheck" and cost == 0)
     return solver == "llm" and route.startswith("agent:")
 
 
@@ -105,7 +106,7 @@ def group(records: list[dict]) -> tuple[dict[str, list[tuple[dict, float]]], lis
     everything = []
     for rec in records:
         everything.append((rec["route"], rec["features"], rec["cost"]))
-        if rec["route"] not in ("fastpath", "coding:contradiction"):
+        if rec["route"] not in estimator.FREE_ROUTES:
             by_route[rec["route"]].append((rec["features"], rec["cost"]))
     return by_route, everything
 
@@ -160,7 +161,7 @@ def fit_route(route: str, samples: list[tuple[dict, float]]) -> dict:
 def report(title: str, everything: list[tuple[str, dict, float]], params: dict) -> None:
     actual = [cost for _, _, cost in everything]
     point, upper = zip(*(estimator.predict(route, f, params) for route, f, _ in everything))
-    llm = [i for i, (route, _, _) in enumerate(everything) if route not in ("fastpath", "coding:contradiction")]
+    llm = [i for i, (route, _, _) in enumerate(everything) if route not in estimator.FREE_ROUTES]
     print(f"\n{title}: {len(everything)} задач, из них {len(llm)} с вызовами LLM; "
           f"факт {sum(actual):.0f} токенов, прогноз {sum(point):.0f}, верхний {sum(upper):.0f}")
     for name, idx in (("все задачи", range(len(actual))), ("только LLM", llm)):

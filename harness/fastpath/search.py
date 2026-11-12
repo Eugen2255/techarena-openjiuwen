@@ -161,6 +161,11 @@ def knowledge_base_lookup(task: Task, workdir: Path) -> FastAnswer | None:
         # Невыполнимой считаем только при базе в ожидаемом формате и полном имени (а не «Irina's employer»).
         if kb.clean and _FULL_NAME_RE.fullmatch(base):
             return FastAnswer(None, infeasible=True, note=f"knowledge_base_lookup: {exc}")
+        # Только имя, а людей с таким именем в базе несколько — неясно, о ком вопрос.
+        namesakes = [title for title in kb.records if title.split()[0] == base.casefold()]
+        if kb.clean and " " not in base and len(namesakes) >= 2:
+            return FastAnswer(None, infeasible=True,
+                              note=f"knowledge_base_lookup: {base!r} matches {len(namesakes)} entries")
         return None
     if len(values) == 1:
         return FastAnswer(values.pop(), note=f"knowledge_base_lookup: {len(hops)} hops")

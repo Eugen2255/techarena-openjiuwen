@@ -55,12 +55,23 @@ def _get_limiter(settings: Settings) -> RateLimiter:
     return _limiter
 
 
-def _is_retryable(exc: BaseException) -> bool:
+def _error_chain(exc: BaseException) -> str:
     texts = []
     while exc is not None and len(texts) < 5:
         texts.append(f"{type(exc).__name__}: {exc}")
         exc = exc.__cause__ or exc.__context__
-    return bool(_RETRYABLE_RE.search(" | ".join(texts)))
+    return " | ".join(texts)
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    return bool(_RETRYABLE_RE.search(_error_chain(exc)))
+
+
+def _short_reason(exc: BaseException) -> str:
+    """Короткая причина для лога: 429, 5xx, таймаут — openJiuwen оборачивает их в FrameworkError."""
+    chain = _error_chain(exc)
+    match = _RETRYABLE_RE.search(chain)
+    return chain[max(0, match.start() - 20):match.end() + 100] if match else chain[:120]
 
 
 class MeteredModel(Model):
@@ -107,7 +118,7 @@ class MeteredModel(Model):
                     raise
                 delay = 2 ** attempt + random.random()
                 log.warning("[%s] LLM call failed (%s), retry %d/%d in %.1fs",
-                            self._task_id, type(exc).__name__, attempt + 1, MAX_RETRIES, delay)
+                            self._task_id, _short_reason(exc), attempt + 1, MAX_RETRIES, delay)
                 await asyncio.sleep(delay)
                 continue
             finally:

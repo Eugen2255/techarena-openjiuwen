@@ -42,12 +42,49 @@ def compact_test_output(output: str, limit: int = 1500) -> str:
     return text if len(text) <= limit else text[:limit] + "\n..."
 
 
-def contradictory_tests(test_sources: list[str]) -> bool:
-    """Один и тот же вызов ожидается с разными литералами или и True, и False.
+# Функции, у которых два одинаковых вызова законно дают разное (тест «значения различаются» не противоречив).
+_NONDETERMINISTIC_RE = re.compile(r"rand|uuid|time|token|nonce|shuffle|choice|sample|unique|counter|next_id",
+                                  re.IGNORECASE)
 
-    Понимает assertEqual(f(x), 5), assertTrue(f(x) == 5) и пару assertTrue(e) / assertFalse(e).
+
+def _comparison(name: str, args: list[ast.expr]) -> tuple[ast.expr, ast.expr, bool] | None:
+    """(левая часть, правая часть, ожидается равенство?) для assertEqual/NotEqual и assertTrue/False(a ==/!= b)."""
+    if name in ("assertEqual", "assertEquals") and len(args) >= 2:
+        return args[0], args[1], True
+    if name in ("assertNotEqual", "assertNotEquals") and len(args) >= 2:
+        return args[0], args[1], False
+    if name in ("assertTrue", "assertFalse") and args and isinstance(args[0], ast.Compare) \
+            and len(args[0].ops) == 1 and isinstance(args[0].ops[0], (ast.Eq, ast.NotEq)):
+        equal = isinstance(args[0].ops[0], ast.Eq) == (name == "assertTrue")
+        return args[0].left, args[0].comparators[0], equal
+    return None
+
+
+def _deterministic_call(expr: ast.expr) -> bool:
+    """Вызов с литералами в аргументах и «неслучайным» именем: два одинаковых вызова дают одно и то же."""
+    if not isinstance(expr, ast.Call):
+        return False
+    func = expr.func.attr if isinstance(expr.func, ast.Attribute) else getattr(expr.func, "id", "")
+    if not func or _NONDETERMINISTIC_RE.search(func):
+        return False
+    try:
+        for arg in [*expr.args, *(k.value for k in expr.keywords)]:
+            ast.literal_eval(arg)
+    except (ValueError, SyntaxError):
+        return False
+    return True
+
+
+def contradictory_tests(test_sources: list[str]) -> bool:
+    """Тесты не может пройти никакая честная реализация.
+
+    Понимает: один вызов ожидается с разными литералами (assertEqual(f(x), 5) и assertTrue(f(x) == 6));
+    литерал и ожидается, и запрещён (assertEqual(f(x), 5) и assertNotEqual(f(x), 5)); пару assertTrue(e) /
+    assertFalse(e); самосравнение детерминированного вызова (assertNotEqual(f(1), f(1)), assertFalse(f(1) == f(1))).
     """
     expected: dict[str, set] = {}
+    forbidden: dict[str, set] = {}
+    truth: dict[str, set] = {}
     for source in test_sources:
         try:
             tree = ast.parse(source)
@@ -57,24 +94,21 @@ def contradictory_tests(test_sources: list[str]) -> bool:
             if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
                 continue
             name, args = node.func.attr, node.args
-            pair = None
-            if name in ("assertEqual", "assertEquals") and len(args) >= 2:
-                pair = args[0], args[1]
-            elif (name == "assertTrue" and args and isinstance(args[0], ast.Compare)
-                  and len(args[0].ops) == 1 and isinstance(args[0].ops[0], ast.Eq)):
-                pair = args[0].left, args[0].comparators[0]
-            if pair is not None:
+            comparison = _comparison(name, args)
+            if comparison is not None:
+                left, right, equal = comparison
+                if not equal and ast.dump(left) == ast.dump(right) and _deterministic_call(left):
+                    return True
                 try:
-                    value = ast.literal_eval(pair[1])
+                    value = repr(ast.literal_eval(right))
                 except (ValueError, SyntaxError):
                     continue
-                key = ast.dump(pair[0])
+                (expected if equal else forbidden).setdefault(ast.dump(left), set()).add(value)
             elif name in ("assertTrue", "assertFalse") and args:
-                key, value = ast.dump(args[0]), name == "assertTrue"
-            else:
-                continue
-            expected.setdefault(key, set()).add(repr(value))
-    return any(len(values) > 1 for values in expected.values())
+                truth.setdefault(ast.dump(args[0]), set()).add(name == "assertTrue")
+    return (any(len(v) > 1 for v in expected.values())
+            or any(expected.get(k, set()) & v for k, v in forbidden.items())
+            or any(len(v) > 1 for v in truth.values()))
 
 
 def apply_functions(source: str, reply_code: str) -> str | None:

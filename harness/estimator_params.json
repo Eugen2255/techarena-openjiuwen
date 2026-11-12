@@ -1,54 +1,63 @@
 {
-  "fitted_at": "2026-11-12 00:09",
+  "fitted_at": "2026-11-12 23:11",
   "fitted_on": [
-    "20261112_000457",
-    "20261112_000614",
-    "20261112_000804"
+    "20261112_230647",
+    "20261112_230759",
+    "20261112_230958",
+    "20261112_230553"
   ],
-  "n_records": 350,
+  "n_records": 410,
   "routes": {
     "coding": {
-      "intercept": 95.6667,
+      "intercept": 96.5152,
       "coef": {},
-      "upper_factor": 1.366,
+      "upper_factor": 1.354,
       "n": 66,
-      "mean_cost": 95.7,
-      "loo_mae": 22.9,
-      "loo_mape": 0.277,
+      "mean_cost": 96.5,
+      "loo_mae": 23.5,
+      "loo_mape": 0.284,
       "loo_under": 0.5,
       "loo_upper_under": 0.091
     },
     "oneshot:data_analysis": {
-      "intercept": 79.3588,
-      "coef": {},
-      "upper_factor": 1.54,
-      "n": 34,
-      "mean_cost": 79.4,
-      "loo_mae": 48.1,
-      "loo_mape": 0.301,
-      "loo_under": 0.706,
-      "loo_upper_under": 0.088
+      "intercept": -14.5976,
+      "coef": {
+        "instruction_chars": 0.331149,
+        "n_files": 0.0,
+        "workspace_kb": -0.515701
+      },
+      "upper_factor": 1.032,
+      "n": 24,
+      "mean_cost": 112.2,
+      "loo_mae": 2.8,
+      "loo_mape": 0.025,
+      "loo_under": 0.542,
+      "loo_upper_under": 0.083
     },
     "oneshot:math": {
-      "intercept": 53.6158,
-      "coef": {},
-      "upper_factor": 1.468,
+      "intercept": -32.3755,
+      "coef": {
+        "instruction_chars": 0.182497
+      },
+      "upper_factor": 1.65,
       "n": 19,
-      "mean_cost": 53.6,
-      "loo_mae": 24.2,
-      "loo_mape": 0.634,
-      "loo_under": 0.474,
+      "mean_cost": 54.0,
+      "loo_mae": 23.5,
+      "loo_mape": 0.635,
+      "loo_under": 0.579,
       "loo_upper_under": 0.053
     },
     "oneshot:search": {
-      "intercept": 101.82,
-      "coef": {},
-      "upper_factor": 1.15,
-      "n": 5,
-      "mean_cost": 101.8,
-      "loo_mae": 6.1,
-      "loo_mape": 0.058,
-      "loo_under": 0.4,
+      "intercept": 6.5851,
+      "coef": {
+        "n_files": 2.635027
+      },
+      "upper_factor": 1.02,
+      "n": 9,
+      "mean_cost": 104.7,
+      "loo_mae": 1.4,
+      "loo_mape": 0.013,
+      "loo_under": 0.556,
       "loo_upper_under": 0.0
     }
   }

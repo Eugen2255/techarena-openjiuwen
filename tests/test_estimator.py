@@ -9,7 +9,7 @@ sys.path.insert(0, str(REPO))
 
 from harness import estimator  # noqa: E402
 from harness.answers import normalize_answer  # noqa: E402
-from harness.tasks import load_tasks  # noqa: E402
+from harness.tasks import Task, load_tasks  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location("fit_estimator", REPO / "scripts" / "fit_estimator.py")
 fit_estimator = importlib.util.module_from_spec(_spec)
@@ -33,9 +33,19 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(estimator.detect_route(task), "coding:contradiction")
         self.assertEqual(estimator.estimate(task, params={}).cost, 0)
 
+    def test_precheck_route_is_free(self):
+        task = tasks("tasks_custom")["data_analysis_x001"]  # вопрос про колонку discount, которой нет
+        self.assertEqual(estimator.detect_route(task), "precheck")
+        self.assertEqual(estimator.estimate(task, params={}).cost, 0)
+
     def test_oneshot_route(self):
-        task = tasks("tasks_custom")["data_analysis_x001"]
-        self.assertEqual(estimator.detect_route(task), "oneshot:data_analysis")
+        example = tasks("tasks_examples")["data_analysis_0002"]
+        paraphrase = Task(task_id="t", task_dir=example.task_dir, task_type="data_analysis",
+                          instruction="The file sales.csv has columns order_id,region,product,month,units,price "
+                                      "(20 rows). What was the total revenue (units times price) from product "
+                                      "'widget' in months 1 through 6 inclusive? Use bash with python3 to compute it.",
+                          reward=1, check="exact_int", raw={})
+        self.assertEqual(estimator.detect_route(paraphrase), "oneshot:data_analysis")
 
 
 class PredictTest(unittest.TestCase):

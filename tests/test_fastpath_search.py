@@ -82,11 +82,14 @@ class VariantsTest(unittest.TestCase):
         no_mentor = dict(BASE_KB, **{"person_irina_smith.md": "# Irina Smith\n\nBorn: 1983\nEmployer: Dune Robotics\n"})
         twins = dict(BASE_KB, **{"person_irina_smith_2.md": "# Irina Smith\n\nBorn: 1990\nEmployer: Granite AI\n"
                                                             "Mentor: Alice Smith\n"})
+        two_irinas = dict(BASE_KB, **{"person_irina_haddad.md": "# Irina Haddad\n\nBorn: 1975\nEmployer: Granite AI\n"
+                                                                "Mentor: Alice Smith\n"})
         cases = {
             "person absent": ("In which year was Pavel Haddad born?", None),
             "employer has no file": ("In which city is the headquarters of Irina Smith's employer?", dangling),
             "missing field": ("Who is Irina Smith's mentor?", no_mentor),
             "namesakes disagree": ("In which year was Irina Smith born?", twins),
+            "first name of several people": ("In which year was Irina born?", two_irinas),
         }
         for name, (question, kb) in cases.items():
             with self.subTest(case=name):

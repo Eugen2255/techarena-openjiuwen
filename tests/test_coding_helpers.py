@@ -53,6 +53,21 @@ class ContradictionTest(unittest.TestCase):
         self.assertTrue(contradictory_tests(["self.assertEqual(m.total([1, 2]), 3)\n"
                                              "self.assertTrue(m.total([1, 2]) == 4)\n"]))
 
+    def test_detects_impossible_inequalities(self):
+        for tests in (
+            "self.assertNotEqual(m.total([1, 2, 3]), m.total([1, 2, 3]))\n",
+            "self.assertFalse(m.total([1, 2]) == m.total([1, 2]))\n",
+            "self.assertTrue(m.reverse_words('a b') != m.reverse_words('a b'))\n",
+            "self.assertEqual(m.total([1, 2]), 3)\nself.assertNotEqual(m.total([1, 2]), 3)\n",
+        ):
+            with self.subTest(tests=tests):
+                self.assertTrue(contradictory_tests([tests]))
+
+    def test_inequality_of_random_values_is_legit(self):
+        self.assertFalse(contradictory_tests(["self.assertNotEqual(m.random_token(), m.random_token())\n"]))
+        self.assertFalse(contradictory_tests(["self.assertNotEqual(m.next_id(), m.next_id())\n"]))
+        self.assertFalse(contradictory_tests(["self.assertNotEqual(m.total([1, 2]), 4)\n"]))
+
     def test_consistent_mixed_forms_are_fine(self):
         self.assertFalse(contradictory_tests(["self.assertEqual(m.total([1, 2]), 3)\n"
                                               "self.assertTrue(m.total([1, 2]) == 3)\n"]))

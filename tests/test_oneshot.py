@@ -57,6 +57,25 @@ class MissingQuantityTest(unittest.TestCase):
         self.assertEqual(oneshot.missing_quantity(question, self.COLUMNS), "discount")
         self.assertEqual(oneshot.missing_quantity("What is the average rating of 'gizmo'?", self.COLUMNS), "rating")
 
+    def test_event_or_concept_without_column(self):
+        cases = {
+            "How many units of product 'widget' were returned in months 2 through 3 inclusive?": "returned",
+            "How much profit did product 'gizmo' make in months 1 through 4 inclusive?": "profit",
+            "Which customer bought the most units of product 'widget'?": "customer",
+            "What was the shipping cost of order 17?": "shipping",
+        }
+        for question, word in cases.items():
+            with self.subTest(question=question):
+                self.assertEqual(oneshot.missing_quantity(question, self.COLUMNS), word)
+
+    def test_concept_defined_in_question_or_present_as_column(self):
+        self.assertIsNone(oneshot.missing_quantity(
+            "What was the total cost (units times price) of product 'widget'?", self.COLUMNS))
+        self.assertIsNone(oneshot.missing_quantity(
+            "How many units of 'widget' were returned in month 3?", self.COLUMNS + ["returned_units"]))
+        self.assertIsNone(oneshot.missing_quantity(
+            "Which customer bought the most units?", self.COLUMNS + ["customer"]))
+
     def test_feasible_questions_pass(self):
         for question in (
             "What was the total revenue (units times price) from product 'widget' in months 1 through 3 inclusive?",

@@ -60,10 +60,22 @@ class VariantsTest(unittest.TestCase):
                        "and it keeps one share (rounded down). How many boxes does it have at the end?",
         "split into zero": "A warehouse starts with 100 boxes. Then the stock is split equally into 0 warehouses "
                            "and it keeps one share (rounded down). How many boxes does it have at the end?",
+        "rate without duration": "A warehouse starts with 500 boxes. It receives 2 deliveries of 30 boxes each. "
+                                 "It ships 40 boxes per day. How many boxes does it have at the end?",
+        "split without count": "A warehouse starts with 500 boxes. Then the stock is split equally among its sister "
+                               "warehouses and it keeps one share (rounded down). "
+                               "How many boxes does it have at the end?",
+        # Незнакомое предложение есть, но число дней дать не может.
+        "rate without duration + unrelated unknown sentence":
+            "A warehouse starts with 500 boxes. Then the stock is halved (rounded down). It ships 40 boxes per day. "
+            "It loses 20 boxes to water damage. How many boxes does it have at the end?",
     }
     REFUSED = {
         "vague but unknown operation": "A warehouse starts with 100 boxes. Then some of the stock is lost. "
                                        "How many boxes does it have at the end?",
+        # Незнакомое предложение могло бы дать недостающее число — невыполнимость не объявляем.
+        "rate without duration + unknown sentence": "A warehouse starts with 500 boxes. It ships 40 boxes per day. "
+                                                    "This goes on for a week. How many boxes does it have at the end?",
         "negative stock": "A warehouse starts with 10 boxes. It ships 5 boxes per day for 3 days. "
                           "It receives 2 deliveries of 87 boxes each. How many boxes does it have at the end?",
         "unknown operation": "A warehouse starts with 100 boxes. Then 10% of the stock is lost. "

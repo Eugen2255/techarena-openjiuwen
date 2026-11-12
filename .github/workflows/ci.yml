@@ -1,0 +1,90 @@
+# Проверки без LLM и без ключей: тесты, быстрый путь, чистая сборка образа и запуск с флагами регламента.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: Тесты и быстрый путь (без LLM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit-тесты
+        run: python -m unittest discover -s tests -v
+      - name: Быстрый путь на примерах и сгенерированных задачах (ошибок должно быть 0)
+        run: |
+          python scripts/check_fastpath.py tasks_examples
+          python scripts/check_fastpath.py tasks_custom
+          for seed in 101 102; do
+            python scripts/generate_tasks.py --count 200 --seed "$seed" --out "/tmp/gen_$seed" --force
+            python scripts/check_fastpath.py "/tmp/gen_$seed"
+          done
+
+  docker:
+    name: Чистая сборка и запуск с флагами регламента
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Чистая сборка без кеша и без зеркала (у организаторов лимит 1000 с)
+        run: |
+          start=$(date +%s)
+          docker build --no-cache --pull -t hack:latest .
+          echo "BUILD_SECONDS=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"
+
+      - name: Размер образа (лимит 4 ГБ)
+        run: |
+          docker images --format "{{.Repository}}:{{.Tag}} -> {{.Size}}" hack:latest
+          echo "IMAGE_BYTES=$(docker image inspect --format '{{.Size}}' hack:latest)" >> "$GITHUB_ENV"
+
+      - name: Запуск без сети с флагами регламента
+        run: |
+          # Папка задач доступна на запись всем — как OUT у организаторов (chmod 777).
+          mkdir -p /tmp/tasks && cp -r tasks_examples/. /tmp/tasks/ && chmod -R 777 /tmp/tasks
+          start=$(date +%s)
+          docker run --rm --name run-ci --network none \
+            -e LLM_BASE_URL=http://llm.invalid/v1 -e LLM_API_KEY=ci \
+            -v /tmp/tasks:/data/tasks:rw \
+            --read-only --tmpfs /tmp:rw,size=2g -e HOME=/tmp \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --cpus 2 --memory 7g --pids-limit 512 \
+            --workdir /app --entrypoint python \
+            hack:latest /app/run_agent.py --tasks-dir /data/tasks
+          echo "RUN_SECONDS=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"
+          answers=$(ls /tmp/tasks/*/answer.txt | wc -l)
+          echo "ANSWERS=$answers" >> "$GITHUB_ENV"
+          python3 scripts/evaluate.py /tmp/tasks --original tasks_examples
+          test "$answers" -ge 6  # без LLM быстрый путь решает 6 из 8 примеров
+
+      - name: Для информации — папка задач без права записи для root без capabilities
+        continue-on-error: true
+        run: |
+          mkdir -p /tmp/tasks_ro && cp -r tasks_examples/. /tmp/tasks_ro/ && chmod -R go-w /tmp/tasks_ro
+          docker run --rm --network none -e LLM_BASE_URL=http://llm.invalid/v1 -e LLM_API_KEY=ci \
+            -v /tmp/tasks_ro:/data/tasks:rw --read-only --tmpfs /tmp:rw,size=2g -e HOME=/tmp \
+            --cap-drop ALL --security-opt no-new-privileges --workdir /app --entrypoint python \
+            hack:latest /app/run_agent.py --tasks-dir /data/tasks
+          echo "answers written: $(ls /tmp/tasks_ro/*/answer.txt 2>/dev/null | wc -l)"
+
+      - name: Итог
+        if: always()
+        run: |
+          {
+            echo "### Docker"
+            echo "| | значение | лимит |"
+            echo "|---|---|---|"
+            echo "| чистая сборка | ${BUILD_SECONDS:-?} с | 1000 с |"
+            echo "| размер образа | $(( ${IMAGE_BYTES:-0} / 1000000 )) МБ | 4000 МБ |"
+            echo "| запуск без сети на примерах | ${RUN_SECONDS:-?} с, ответов: ${ANSWERS:-?} из 8 | — |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          test "${BUILD_SECONDS:-9999}" -lt 900
+          test "${IMAGE_BYTES:-9999999999}" -lt 4000000000

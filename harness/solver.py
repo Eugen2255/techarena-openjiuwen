@@ -227,7 +227,9 @@ async def solve(task: Task, settings: Settings, meter: TokenMeter) -> SolveResul
                 result.answer = answer
     except Exception as exc:  # noqa: BLE001 — одна задача не должна ронять весь прогон
         result.error = f"{type(exc).__name__}: {exc}"
-        log.exception("[%s] solve failed", task.task_id)
+        # Полный трейсбек — только в DEBUG: при недоступном прокси он печатался бы на каждую задачу.
+        log.error("[%s] solve failed: %s", task.task_id, result.error[:300],
+                  exc_info=log.isEnabledFor(logging.DEBUG))
     finally:
         _unregister(tool)
         if not had_stray and stray_answer.is_file() and task.workspace is not None:

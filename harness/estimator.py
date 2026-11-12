@@ -16,7 +16,7 @@ from pathlib import Path
 
 from harness import fastpath
 from harness.coding import MAX_SOURCE_BYTES, contradictory_tests
-from harness.oneshot import supports_oneshot
+from harness.oneshot import precheck_infeasible, supports_oneshot
 from harness.tasks import Task
 
 PARAMS_PATH = Path(__file__).with_name("estimator_params.json")
@@ -24,6 +24,8 @@ PARAMS_PATH = Path(__file__).with_name("estimator_params.json")
 DEFAULT_COST = {"coding": 110, "oneshot:math": 70, "oneshot:data_analysis": 100, "oneshot:search": 100,
                 "agent:data_analysis": 300, "agent:math": 220, "agent:search": 480}
 DEFAULT_AGENT_COST = 400
+# Маршруты, где задача решается или отсеивается без вызова LLM.
+FREE_ROUTES = ("fastpath", "coding:contradiction", "precheck")
 DEFAULT_UPPER_FACTOR = 2.0
 MIN_LLM_COST = 20
 
@@ -82,7 +84,7 @@ def detect_route(task: Task) -> str:
                 return "coding:contradiction"
             return "coding"
     if supports_oneshot(task):
-        return f"oneshot:{task.task_type}"
+        return "precheck" if precheck_infeasible(task) else f"oneshot:{task.task_type}"
     return f"agent:{task.task_type}"
 
 
@@ -95,7 +97,7 @@ def load_params(path: Path = PARAMS_PATH) -> dict:
 
 def predict(route: str, features: dict[str, float], params: dict) -> tuple[float, float]:
     """(точечная оценка, верхняя оценка) для маршрута."""
-    if route in ("fastpath", "coding:contradiction"):
+    if route in FREE_ROUTES:
         return 0.0, 0.0
     model = params.get(route)
     if model is None:
