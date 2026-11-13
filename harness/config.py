@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -58,6 +60,22 @@ def _env_float(name: str, default: float | None) -> float | None:
     return float(value) if value else default
 
 
+_BUDGET_RE = re.compile(r"(\d+(?:\.\d+)?(?:e[+-]?\d+)?)([km]?)(?:tokens?)?")
+
+
+def parse_budget(value: str | None) -> float | None:
+    """Бюджет в том виде, в каком его могут передать в BUDGET: «100000», «1e5», «100_000», «100 000», «100,000»,
+    «100k», «0.1M». Нечитаемое или неположительное значение — None: лучше бюджет по умолчанию, чем падение при старте."""
+    text = (value or "").strip().lower().replace(" ", "").replace("_", "").replace(",", "")
+    match = _BUDGET_RE.fullmatch(text)
+    if not match:
+        if text:
+            logging.getLogger(__name__).warning("cannot parse budget %r, using the default", value)
+        return None
+    budget = float(match[1]) * {"": 1, "k": 1e3, "m": 1e6}[match[2]]
+    return budget if budget > 0 else None
+
+
 def _env_int(name: str, default: int) -> int:
     value = os.getenv(name, "").strip()
     return int(value) if value else default
@@ -86,8 +104,9 @@ def parse_settings(argv: list[str] | None = None) -> Settings:
         command_timeout_s=_env_float("HARNESS_COMMAND_TIMEOUT", 60),
         max_steps=_env_int("HARNESS_MAX_STEPS", 6),
         max_tool_output=_env_int("HARNESS_MAX_TOOL_OUTPUT", 2000),
-        # Бюджет — 100K; если организаторы передадут BUDGET, берём его. Остаток прокси не сообщает.
-        token_budget=_env_float("BUDGET", None) or _env_float("HARNESS_TOKEN_BUDGET", DEFAULT_BUDGET),
+        # Бюджет берём из BUDGET: организаторы предупредили, что он может отличаться от 100K. Остаток прокси не сообщает.
+        token_budget=(parse_budget(os.getenv("BUDGET")) or parse_budget(os.getenv("HARNESS_TOKEN_BUDGET"))
+                      or DEFAULT_BUDGET),
         # Потолок на одну задачу: дальше задача считается слишком дорогой и бросается.
         task_token_cap=_env_float("HARNESS_TASK_TOKEN_CAP", 6000),
         # Прокси — NeuralDeep, лимит 60 запросов в минуту; держимся ниже, чтобы не ловить 429.
@@ -96,8 +115,11 @@ def parse_settings(argv: list[str] | None = None) -> Settings:
         llm_concurrency=_env_int("HARNESS_LLM_CONCURRENCY", 3),
         # Потолок выхода одного вызова: ограничивает худшую стоимость вызова для резерва бюджета.
         # Для моделей с рассуждениями его придётся поднять: рассуждения входят в выходные токены.
-        max_output_tokens=_env_int("HARNESS_MAX_OUTPUT_TOKENS", 2048),
-        # Рассуждения входят в выход: на math в среднем ~230 выходных токенов, потолок с запасом.
+        # Потолок выхода резервируется до вызова: чем он ниже, тем меньше «мёртвый хвост» бюджета в конце прогона.
+        # Замеры 13.11 (-noreason): медиана 73 токена на вызов, максимум 167.
+        max_output_tokens=_env_int("HARNESS_MAX_OUTPUT_TOKENS", 1024),
+        # Рассуждения входят в выход: на math медиана 215 токенов, максимум 554; потолок с большим запасом —
+        # модель с рассуждениями работает, только когда бюджет не узкое место (runner.adapt_to_budget).
         max_output_tokens_reasoning=_env_int("HARNESS_MAX_OUTPUT_TOKENS_REASONING", 4096),
         log_dir=Path(os.getenv("HARNESS_LOG_DIR", "/tmp/harness_logs")),
     )

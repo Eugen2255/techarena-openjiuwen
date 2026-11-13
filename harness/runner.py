@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -13,8 +14,9 @@ from collections import deque
 from pathlib import Path
 
 from harness import STARTED_AT, estimator, fastpath
-from harness.config import Settings, parse_settings
+from harness.config import Settings, is_reasoning, parse_settings
 from harness.estimator import Estimate
+from harness.llm import max_output_tokens
 from harness.meter import TokenMeter
 from harness.solver import SolveResult, choose_model, solve, workdir_for
 from harness.tasks import Task, load_tasks
@@ -24,6 +26,12 @@ log = logging.getLogger("harness")
 
 # Столько ошибок LLM подряд (без единого ответа) считаем признаком, что прокси больше не отвечает.
 MAX_LLM_ERRORS_IN_ROW = 5
+# Бюджет — узкое место, если оценка всех задач больше этой доли остатка: тогда math решаем без рассуждений.
+BUDGET_BINDS_SHARE = 0.9
+# Во сколько раз дешевле math без рассуждений: 5 708 против 17 850 токенов на тех же 69 задачах (13.11).
+NOREASON_MATH_FACTOR = 0.32
+# Запас под вход/10 в резерве вызова (MeteredModel резервирует потолок выхода + оценку входа / 10).
+INPUT_RESERVE = 300
 
 
 def plan(tasks: list[Task], estimates: dict[str, Estimate]) -> list[Task]:
@@ -112,6 +120,7 @@ class Run:
         estimates = {t.task_id: estimator.estimate(t, params) for t in tasks}
         log.info("estimated cost of the remaining %d tasks: %.0f tokens (upper %.0f)", len(tasks),
                  sum(e.cost for e in estimates.values()), sum(e.upper for e in estimates.values()))
+        settings = self.adapt_to_budget(tasks, estimates)
         queue = deque(plan(tasks, estimates))
 
         async def worker() -> None:
@@ -126,10 +135,12 @@ class Run:
                 task = queue.popleft()
                 estimate = estimates[task.task_id]
                 remaining = meter.remaining()
-                if remaining is not None and remaining < estimate.cost:
+                # Вызов не начнётся, пока в остатке нет места под резерв худшего случая: потолок выхода + вход/10.
+                needed = max(estimate.cost, max_output_tokens(settings, choose_model(task, settings)) + INPUT_RESERVE)
+                if remaining is not None and remaining < needed:
                     self.stats["skipped_budget"] += 1
-                    log.info("[%s] skipped: estimate %.0f > remaining budget %.0f",
-                             task.task_id, estimate.cost, remaining)
+                    log.info("[%s] skipped: needs %.0f (estimate %.0f), remaining budget %.0f",
+                             task.task_id, needed, estimate.cost, remaining)
                     continue
                 try:
                     result = await asyncio.wait_for(solve(task, settings, meter),
@@ -140,7 +151,9 @@ class Run:
                                          usage=meter.task_usage(task.task_id))
                 self.finish(task, result, estimate)
 
-                if result.error and result.usage.calls == 0:
+                if result.error and result.usage.calls == 0 and result.error.startswith("BudgetExceeded"):
+                    self.stats["skipped_budget"] += 1  # не хватило остатка на резерв — это не отказ прокси
+                elif result.error and result.usage.calls == 0:
                     self.stats["llm_errors_in_row"] += 1
                     if self.stats["llm_errors_in_row"] >= MAX_LLM_ERRORS_IN_ROW:
                         self.request_stop("LLM proxy stopped answering")
@@ -148,7 +161,30 @@ class Run:
                     self.stats["llm_errors_in_row"] = 0
 
         await asyncio.gather(*(worker() for _ in range(max(1, settings.workers))))
+        if self.stats["skipped_budget"] and self.stop_reason is None:
+            self.stop_reason = "token budget"  # часть задач пропущена: на них не хватило остатка
         return len(queue)
+
+    def adapt_to_budget(self, tasks: list[Task], estimates: dict[str, Estimate]) -> Settings:
+        """Если оценка всех задач не влезает в бюджет, math решаем моделью без рассуждений.
+
+        С рассуждениями math точнее (68/69 против 58/69 на задачах нового вида), но втрое дороже: когда бюджет —
+        узкое место, без рассуждений за те же токены решается больше задач. Оценки math пересчитываем.
+        """
+        settings, remaining = self.settings, self.meter.remaining()
+        total = sum(e.cost for e in estimates.values())
+        if (remaining is None or total <= remaining * BUDGET_BINDS_SHARE
+                or settings.math_model == settings.model or not is_reasoning(settings.math_model)):
+            return settings
+        log.warning("estimated cost %.0f > %.0f%% of the remaining budget %.0f: math is solved by %s",
+                    total, BUDGET_BINDS_SHARE * 100, remaining, settings.model)
+        for task in tasks:
+            if task.task_type == "math":
+                old = estimates[task.task_id]
+                estimates[task.task_id] = dataclasses.replace(old, cost=old.cost * NOREASON_MATH_FACTOR,
+                                                              upper=old.upper * NOREASON_MATH_FACTOR)
+        self.settings = dataclasses.replace(settings, math_model=settings.model)
+        return self.settings
 
 
 def check_writable(tasks_dir: Path) -> bool:
