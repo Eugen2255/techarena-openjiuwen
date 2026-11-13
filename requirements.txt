@@ -265,7 +265,7 @@ openai==3.46.0
     # via openjiuwen
 openapi-pydantic==0.6.0
     # via fastmcp-slim
-openjiuwen==0.1.20.post1
+openjiuwen==0.1.20.post3
     # via -r requirements.in
 openpyxl==3.1.5
     # via openjiuwen

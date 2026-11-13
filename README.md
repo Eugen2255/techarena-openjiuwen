@@ -236,9 +236,13 @@ data_analysis («total revenue», «cost», «returned» при колонке s
 --infeasible-kinds missing_duration missing_parts returns_not_tracked missing_column_phrasing unknown_field
 absent_company ambiguous_first_name impossible_assert`.
 
+Запасной путь — цикл агента `ReActAgent` — проверен отдельно на задачах с раскладкой, которую решение одним вызовом
+не берёт: два CSV, которые нужно соединить, JSON вместо CSV, база знаний из 60 биографий (длиннее предела для
+запроса), coding с двумя модулями. Решено 11/11, около 300 токенов на задачу (`scripts/make_layout_tasks.py`).
+
 ## Зависимости
 
 - Базовый образ: `python:3.12.16-slim-bookworm` (зафиксирован по digest).
-- `openjiuwen==0.1.20.post1` (последняя версия на 10.11.2026), полный список версий — `requirements.txt`
+- `openjiuwen==0.1.20.post3` (последняя версия на 13.11.2026; с `post1` сравнена на тех же прогонах — результаты совпали), полный список версий — `requirements.txt`
   (собран `uv pip compile` под Linux, Python 3.12).
 - Словари `tiktoken` кладутся в образ при сборке: при запуске сети нет.
