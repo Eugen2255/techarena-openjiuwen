@@ -202,7 +202,7 @@ async def _solve_search(task: Task, model) -> Outcome | None:
     found = _ANSWER_RE.findall(reply)
     if not found:
         return None
-    answer = found[-1].strip().strip("`").strip()
+    answer = normalize_answer(found[-1], task.check)
     if is_infeasible(answer):
         return Outcome(None, infeasible=True, note="oneshot: model says infeasible", final_text=reply)
     if not answer or answer.casefold() not in kb.casefold():

@@ -203,7 +203,8 @@ async def solve(task: Task, settings: Settings, meter: TokenMeter) -> SolveResul
         outcome = await solve_oneshot(task, settings, meter, model_name)
         if outcome is not None:
             result.solver = "coding" if task.task_type == "coding" else "oneshot"
-            result.answer, result.infeasible, result.local_ok = outcome.answer, outcome.infeasible, outcome.local_ok
+            answer = normalize_answer(outcome.answer, task.check) if outcome.answer is not None else None
+            result.answer, result.infeasible, result.local_ok = answer, outcome.infeasible, outcome.local_ok
             result.note, result.final_text = outcome.note, outcome.final_text
             return result
         context = await gather_context(task, workdir, settings)
